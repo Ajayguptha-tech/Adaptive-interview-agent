@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Adaptive Interview Intelligence | Voice-First Personalized Assessment</title>
+  <meta name="description" content="Personalized technical assessment with automatic resume analysis, voice-first adaptive questions, fair rubric evaluations, and evidence-based reporting.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- Harmonic Sine Wave Canvas Background -->
+  <canvas id="sine-wave-canvas" class="sine-wave-canvas"></canvas>
+
+  <div class="app-container">
+    <!-- TOP NAVIGATION BAR -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="logo-icon" id="brand-logo-icon">🎙️</div>
+        <div>
+          <h1 class="logo-title" id="brand-logo-title">Adaptive Interview Intelligence</h1>
+          <p class="logo-subtitle">Personalized Assessment • Voice-First • Fair Rubric Scoring</p>
+        </div>
+      </div>
+      <div class="header-status">
+        <span class="status-indicator" id="voice-status">
+          <span class="status-dot"></span> Checking Speech Engine...
+        </span>
+        <span class="status-indicator" id="ollama-status">
+          <span class="status-dot"></span> Checking Ollama...
+        </span>
+      </div>
+    </header>
+
+    <!-- WORKFLOW STAGES STEPPER -->
+    <div class="workflow-stepper" id="workflow-stepper">
+      <div class="step-badge active" id="step-nav-upload">
+        <span class="step-num">1</span>
+        <span class="step-name">Resume & Target Role</span>
+      </div>
+      <span class="step-arrow">→</span>
+      <div class="step-badge" id="step-nav-settings">
+        <span class="step-num">2</span>
+        <span class="step-name">Profile & Agenda</span>
+      </div>
+      <span class="step-arrow">→</span>
+      <div class="step-badge" id="step-nav-interview">
+        <span class="step-num">3</span>
+        <span class="step-name">Adaptive Assessment</span>
+      </div>
+      <span class="step-arrow">→</span>
+      <div class="step-badge" id="step-nav-report">
+        <span class="step-num">4</span>
+        <span class="step-name">Intelligence Report</span>
+      </div>
+    </div>
+
+    <!-- VIEW 1: RESUME UPLOAD ONLY (INITIAL SCREEN) -->
+    <main id="upload-view" class="view-panel active">
+      <div class="hero-card hero-3d-layout">
+        <div class="hero-content">
+          <span class="hero-badge badge-primary">✨ 3D Adaptive Intelligence</span>
+          <h2>Personalized Technical Assessment</h2>
+          <p>
+            Upload your resume and specify your target engineering role. Our intelligence engine analyzes your
+            verified technical claims, projects, and experience to automatically structure a fair, tailored assessment agenda.
+          </p>
+        </div>
+        <div class="hero-3d-stage" id="hero-3d-stage">
+          <!-- Three.js Orbit Scene mounts here -->
+        </div>
+      </div>
+
+      <div class="resume-upload-container">
+        <!-- TARGET ROLE INPUT (REQUIRED) -->
+        <div class="form-group">
+          <label for="initial-target-role" class="form-label">
+            Target Technical Role <span class="required-star">*</span>
+          </label>
+          <input 
+            type="text" 
+            id="initial-target-role" 
+            class="form-input" 
+            placeholder="e.g. Python Developer, Full-Stack Developer, Backend Engineer, Software Engineer" 
+            autocomplete="off"
+            required
+          >
+          <p class="form-hint">Specify the engineering role for which your technical competency will be evaluated.</p>
+        </div>
+
+        <!-- RESUME DROP / UPLOAD ZONE -->
+        <div class="form-group">
+          <label class="form-label">
+            Candidate Resume Document <span class="required-star">*</span>
+          </label>
+          <div class="resume-drop-zone" id="initial-drop-zone">
+            <input 
+              type="file" 
+              id="initial-resume-file" 
+              accept=".pdf,.docx,.txt" 
+              style="display: none;"
+            >
+            <div class="drop-zone-icon">📄</div>
+            <p class="drop-zone-prompt">
+              <strong>Drag and drop your resume file here</strong>, or <span class="browse-link">browse files</span>
+            </p>
+            <p class="drop-zone-meta">Supports PDF, DOCX, and TXT formats • Maximum 10 MB file size</p>
+          </div>
+
+          <!-- SELECTED FILE BADGE -->
+          <div class="file-selected-badge" id="file-selected-badge" style="display: none;">
+            <div class="file-info-col">
+              <span class="file-icon">📎</span>
+              <div>
+                <span class="file-name" id="selected-file-name">resume.pdf</span>
+                <span class="file-size" id="selected-file-size">145 KB</span>
+              </div>
+            </div>
+            <button type="button" class="btn-xs btn-secondary" id="change-file-btn">Change File</button>
+          </div>
+        </div>
+
+        <!-- UPLOAD ERROR BANNER -->
+        <div class="error-banner" id="upload-error-banner" style="display: none;">
+          <span class="error-icon">⚠️</span>
+          <span id="upload-error-text">Please provide both a valid resume document and your target role.</span>
+        </div>
+
+        <!-- ANALYZE ACTION BUTTON -->
+        <div class="upload-action-row">
+          <button type="button" class="btn btn-primary btn-lg" id="analyze-resume-btn" disabled>
+            <span>Analyze Resume & Prepare Interview</span>
+            <span class="btn-arrow">→</span>
+            <span class="btn-spinner" id="analyze-spinner" style="display: none;"></span>
+          </button>
+        </div>
+
+        <!-- PROCESSING STATE INDICATOR -->
+        <div class="processing-state-box" id="analysis-loading-state" style="display: none;">
+          <div class="pulse-ring"></div>
+          <div class="processing-text-col">
+            <strong id="analysis-step-title">Analyzing Resume Document...</strong>
+            <span id="analysis-step-text">Extracting technical competencies, tools, and project history...</span>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- VIEW 2: CANDIDATE PROFILE & INTERVIEW SETTINGS (SHOWS ONLY AFTER ANALYSIS) -->
+    <main id="settings-view" class="view-panel">
+      <!-- CANDIDATE PROFILE SUMMARY CARD -->
+      <div class="profile-summary-card" id="profile-summary-card">
+        <div class="profile-header-row">
+          <div>
+            <span class="hero-badge badge-success">Profile Verified</span>
+            <h2 class="profile-name" id="profile-candidate-name">Candidate Profile</h2>
+            <p class="profile-role" id="profile-target-role">Target Role: Software Engineer</p>
+          </div>
+          <div class="profile-meta-badges">
+            <span class="badge badge-primary" id="profile-exp-badge">0 Years Experience</span>
+            <span class="badge badge-success" id="profile-integrity-badge">✓ Integrity Passed</span>
+          </div>
+        </div>
+
+        <div class="profile-details-grid">
+          <div class="profile-col">
+            <span class="sub-label">Verified Resume Skills:</span>
+            <div class="resume-skills-chips" id="profile-skills-chips">
+              <!-- Dynamically populated chips -->
+            </div>
+          </div>
+          <div class="profile-col">
+            <span class="sub-label">Personalized Assessment Focus:</span>
+            <p class="agenda-summary-text" id="profile-agenda-summary">
+              Interview agenda established to validate claimed competencies across core curriculum topics.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ROLE-BASED ELIGIBILITY & INTEGRITY ASSESSMENT CARD (PHASE 3) -->
+      <div class="eligibility-card" id="eligibility-card" style="display: none;">
+        <div class="eligibility-header-row">
+          <div>
+            <div class="eligibility-badge-row">
+              <span class="hero-badge badge-primary">Stage 2: Eligibility Assessment</span>
+              <span class="eligibility-status-badge" id="eligibility-status-badge">Eligible</span>
+            </div>
+            <h3 class="eligibility-headline" id="eligibility-headline">Role-Readiness Assessment</h3>
+            <p class="eligibility-target-role" id="eligibility-target-role">Target Role: Software Engineer</p>
+          </div>
+          <div class="integrity-summary-box">
+            <span class="sub-label">Resume Integrity Status:</span>
+            <div class="integrity-pill" id="integrity-pill">
+              <span class="status-dot dot-online" id="integrity-dot"></span>
+              <span id="integrity-text">No significant inconsistencies detected</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="eligibility-grid">
+          <div class="eligibility-col">
+            <span class="sub-label">Relevant Skills Found:</span>
+            <div class="resume-skills-chips" id="eligibility-found-skills"></div>
+          </div>
+          <div class="eligibility-col">
+            <span class="sub-label">Evidence-Supported Skills:</span>
+            <div class="resume-skills-chips" id="eligibility-supported-skills"></div>
+          </div>
+          <div class="eligibility-col">
+            <span class="sub-label">Missing or Weakly Supported Skills:</span>
+            <div class="resume-skills-chips" id="eligibility-missing-skills"></div>
+          </div>
+        </div>
+
+        <div class="eligibility-reasons-box">
+          <span class="sub-label">Assessment Findings & Supporting Reasons:</span>
+          <ul class="eligibility-reasons-list" id="eligibility-reasons-list"></ul>
+        </div>
+      </div>
+
+      <!-- INTERVIEW CONFIGURATION CARD -->
+      <div class="config-grid">
+        <!-- INTERVIEW MODE (MOCK VS PREDEFINED) -->
+        <div class="config-card">
+          <label class="config-label">Interview Mode</label>
+          <div class="pill-group" id="mode-pills">
+            <button type="button" class="pill active" data-mode="mock">
+              <span class="pill-title">✨ Mock Interview</span>
+              <span class="pill-desc">Realistic, adaptive interview with dynamic questions tailored to your profile</span>
+            </button>
+            <button type="button" class="pill" data-mode="predefined">
+              <span class="pill-title">📚 Trained Questions</span>
+              <span class="pill-desc">Curated benchmark question bank personalized to your resume claims</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- STARTING DIFFICULTY -->
+        <div class="config-card">
+          <label class="config-label">Difficulty Progression</label>
+          <div class="pill-group" id="difficulty-pills">
+            <button type="button" class="pill active" data-difficulty="adaptive">
+              <span class="pill-title">Adaptive (Recommended)</span>
+              <span class="pill-desc">Real-time difficulty adjusts based on answer quality</span>
+            </button>
+            <button type="button" class="pill" data-difficulty="intermediate">
+              <span class="pill-title">Intermediate</span>
+              <span class="pill-desc">Solid technical engineering & problem solving</span>
+            </button>
+            <button type="button" class="pill" data-difficulty="advanced">
+              <span class="pill-title">Advanced</span>
+              <span class="pill-desc">Deep systems, concurrency, and architecture</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- DURATION / QUESTION COUNT -->
+        <div class="config-card">
+          <label class="config-label">Assessment Length</label>
+          <div class="pill-group-row" id="length-pills">
+            <button type="button" class="pill-sm" data-count="3">3 Questions (Quick)</button>
+            <button type="button" class="pill-sm active" data-count="5">5 Questions (Standard)</button>
+            <button type="button" class="pill-sm" data-count="8">8 Questions (In-Depth)</button>
+          </div>
+          <p class="config-hint">Every answer is graded against explicit rubrics. Score normalized to 100.</p>
+        </div>
+
+        <!-- VOICE SETTINGS -->
+        <div class="config-card">
+          <label class="config-label">Voice Interaction</label>
+          <div class="pill-group-row" id="voice-auto-pills">
+            <button type="button" class="pill-sm active" data-voice-auto="true">
+              🔊 Auto-Read Questions
+            </button>
+            <button type="button" class="pill-sm" data-voice-auto="false">
+              🔇 Click-to-Listen Only
+            </button>
+          </div>
+          <p class="config-hint">AI reads questions aloud using text-to-speech. Spoken answers transcribed via speech-to-text.</p>
+        </div>
+      </div>
+
+      <!-- QUESTION PREPARATION PROGRESS INDICATOR -->
+      <div class="prep-indicator-card" id="prep-indicator-card">
+        <h4 class="prep-title">Interview Readiness Agenda</h4>
+        <div class="prep-steps-list">
+          <div class="prep-step-item done" id="prep-step-1">
+            <span class="prep-step-icon">✓</span>
+            <span class="prep-step-label">Resume Analysis & Claim Verification Complete</span>
+          </div>
+          <div class="prep-step-item done" id="prep-step-2">
+            <span class="prep-step-icon">✓</span>
+            <span class="prep-step-label">Personalized Competency Targets Established</span>
+          </div>
+          <div class="prep-step-item active" id="prep-step-3">
+            <span class="prep-step-icon">⏳</span>
+            <span class="prep-step-label">Questions Prepared & Rubrics Bound</span>
+          </div>
+          <div class="prep-step-item ready" id="prep-step-4">
+            <span class="prep-step-icon">🎯</span>
+            <span class="prep-step-label">Ready to Begin Assessment</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="action-footer">
+        <button type="button" class="btn btn-primary btn-lg" id="start-interview-btn">
+          <span>Start Technical Interview</span>
+          <span class="btn-arrow">→</span>
+          <span class="btn-spinner" id="start-spinner" style="display: none;"></span>
+        </button>
+      </div>
+    </main>
+
+    <!-- VIEW 3: ACTIVE INTERVIEW (VOICE-FIRST & QUESTION-DRIVEN WORKSPACE) -->
+    <main id="interview-view" class="view-panel">
+      <!-- PROGRESS BAR & STATS -->
+      <div class="interview-header-card">
+        <div class="progress-info">
+          <div>
+            <span class="badge badge-primary" id="progress-badge">Question 1 of 5</span>
+            <span class="badge badge-success" id="mode-badge">✨ AI Dynamic</span>
+            <span class="badge" id="topic-badge">Topic</span>
+            <span class="badge" id="difficulty-badge">Intermediate</span>
+            <span class="badge" id="type-badge">Conceptual</span>
+          </div>
+          <div class="header-right-actions">
+            <div class="marks-counter">
+              Max Marks: <strong id="question-max-marks">5.0</strong>
+            </div>
+            <button type="button" class="btn btn-danger btn-sm" id="end-interview-btn" title="End interview early and view report">
+              ⏹️ End Interview
+            </button>
+          </div>
+        </div>
+        <div class="progress-bar-track">
+          <div class="progress-bar-fill" id="progress-bar-fill" style="width: 20%;"></div>
+        </div>
+      </div>
+
+      <!-- LIVE ACTIVITY STATUS (PHASE 7) -->
+      <div class="activity-status-card" id="activity-status-card">
+        <div class="activity-status-inner">
+          <span class="status-pulse-dot" id="activity-status-dot"></span>
+          <div class="activity-status-text-col">
+            <strong class="activity-status-state" id="activity-status-state">Ready to listen</strong>
+            <span class="activity-status-detail" id="activity-status-detail">Microphone active. Press record to answer or start typing code.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- SELECTION REASON BANNER -->
+      <div class="selection-reason-banner" id="selection-reason-banner">
+        <span class="reason-icon">💡</span>
+        <span id="selection-reason-text">Starting assessment based on personalized interview plan.</span>
+      </div>
+
+      <!-- QUESTION DISPLAY CARD -->
+      <div class="question-card">
+        <div class="question-top-row">
+          <h3 class="question-text" id="question-text">Loading question...</h3>
+          <div class="question-audio-actions">
+            <button type="button" class="btn btn-audio" id="speak-question-btn" title="Speak question aloud">
+              <span class="btn-audio-icon">🔊</span>
+              <span id="speak-question-label">Listen</span>
+            </button>
+            <button type="button" class="btn btn-audio-stop" id="stop-speaking-btn" style="display: none;" title="Stop audio playback">
+              <span class="btn-audio-icon">⏹️</span>
+              <span>Stop</span>
+            </button>
+            <audio id="question-audio-player" preload="none"></audio>
+          </div>
+        </div>
+        
+        <div class="code-snippet-box" id="code-snippet-box" style="display: none;">
+          <div class="code-snippet-header" id="code-snippet-header">Code Snippet</div>
+          <pre><code id="code-snippet-content"></code></pre>
+        </div>
+      </div>
+
+      <!-- EVALUATION FEEDBACK CARD -->
+      <div class="feedback-card" id="feedback-card" style="display: none;">
+        <div class="feedback-header">
+          <div class="feedback-score-badge" id="feedback-score-badge">
+            Score: <span id="feedback-earned">0</span> / <span id="feedback-max">5</span> (<span id="feedback-percent">0</span>%)
+          </div>
+          <div class="feedback-meta-controls">
+            <button type="button" class="btn-icon-subtle" id="speak-feedback-btn" title="Listen to feedback summary">
+              🔊 Hear Summary
+            </button>
+            <span class="badge" id="feedback-assessment-badge">Evaluation</span>
+          </div>
+        </div>
+        <p class="feedback-summary" id="feedback-summary"></p>
+        
+        <div class="criteria-list" id="feedback-criteria-list"></div>
+
+        <div class="misconception-alert" id="feedback-misconceptions" style="display: none;"></div>
+
+        <div class="feedback-auto-advance" id="feedback-auto-advance">
+          <div class="auto-advance-timer-row">
+            <span class="timer-icon">⏳</span>
+            <span id="feedback-timer-text">Continuing to next question automatically in <strong>5</strong>s...</span>
+            <button type="button" class="btn-link" id="feedback-pause-btn">Pause Timer</button>
+          </div>
+          <div class="progress-bar-track timer-track">
+            <div class="progress-bar-fill timer-fill" id="feedback-timer-fill" style="width: 100%;"></div>
+          </div>
+        </div>
+
+        <div class="feedback-actions">
+          <button type="button" class="btn btn-primary" id="next-question-btn">
+            <span>Continue to Next Question Now</span> →
+          </button>
+        </div>
+      </div>
+
+      <!-- AUTO-EVALUATION COUNTDOWN BANNER -->
+      <div class="auto-eval-banner" id="auto-eval-banner" style="display: none;">
+        <div class="auto-eval-info">
+          <span class="pulse-indicator pulse-amber" id="eval-pulse-dot"></span>
+          <span id="auto-eval-status-text">Inactivity detected: Evaluating answer automatically in <strong>4</strong>s...</span>
+        </div>
+        <div class="auto-eval-actions">
+          <button type="button" class="btn-xs btn-secondary" id="pause-countdown-btn">Pause Timer</button>
+          <button type="button" class="btn-xs btn-primary" id="evaluate-now-btn">Evaluate Now</button>
+        </div>
+        <div class="progress-bar-track timer-track">
+          <div class="progress-bar-fill timer-fill" id="auto-eval-timer-fill" style="width: 100%;"></div>
+        </div>
+      </div>
+
+      <!-- QUESTION-DRIVEN WORKSPACES (NO MANUAL ANSWER TYPE SELECTOR) -->
+      <div class="answer-section" id="answer-section">
+        
+        <!-- WORKSPACE 1: VOICE WORKSPACE (For Conceptual, Practical & Scenario questions) -->
+        <div class="workspace-panel" id="workspace-voice" style="display: block;">
+          <div class="voice-recording-card">
+            <div class="voice-recording-header">
+              <div>
+                <h4 class="voice-panel-title">Spoken Answer Workspace</h4>
+                <p class="voice-panel-subtitle">Speak your technical reasoning clearly into your microphone. Automatically evaluates upon speech completion.</p>
+              </div>
+              <div class="mic-mode-toggle">
+                <label class="toggle-switch">
+                  <input type="checkbox" id="host-mic-checkbox">
+                  <span class="slider"></span>
+                </label>
+                <span class="mic-toggle-label" id="mic-mode-label" title="Switch between browser audio recording and local system microphone">Browser Mic</span>
+              </div>
+            </div>
+
+            <div class="voice-controls-row">
+              <button type="button" class="btn-record" id="record-toggle-btn">
+                <span class="mic-icon" id="record-btn-icon">🎙️</span>
+                <span id="record-btn-label">Start Speaking Answer</span>
+              </button>
+              
+              <div class="recording-status-box" id="recording-live-indicator" style="display: none;">
+                <span class="live-rec-dot"></span>
+                <span>Recording audio...</span>
+                <span class="rec-timer" id="recording-timer">00:00</span>
+              </div>
+
+              <div class="transcribing-status-box" id="transcribing-indicator" style="display: none;">
+                <span class="btn-spinner"></span>
+                <span>Transcribing speech with Speech-to-Text agent...</span>
+              </div>
+            </div>
+
+            <!-- RECOGNIZED TRANSCRIPT REVIEW PANEL -->
+            <div class="transcript-review-panel" id="transcript-review-panel" style="display: none;">
+              <div class="transcript-review-header">
+                <span class="transcript-title">Recognized Spoken Transcript</span>
+                <span class="badge badge-success" id="transcript-engine-badge">STT Transcribed</span>
+              </div>
+              <p class="transcript-hint">Transcript will evaluate automatically. You can review or edit if words were misheard:</p>
+              <textarea 
+                id="transcript-input" 
+                class="transcript-textarea" 
+                rows="4" 
+                placeholder="Spoken words appear here..."
+              ></textarea>
+              
+              <div class="transcript-actions">
+                <button type="button" class="btn btn-secondary btn-sm" id="retry-record-btn">
+                  🔄 Discard & Retry Recording
+                </button>
+                <button type="button" class="btn btn-primary btn-sm" id="submit-transcript-btn">
+                  <span>Evaluate Transcript Now</span>
+                  <span class="btn-spinner" id="transcript-spinner" style="display: none;"></span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- WORKSPACE 2: CODE EDITOR (Automatically revealed for Code Writing & Debugging questions) -->
+        <div class="workspace-panel" id="workspace-code" style="display: none;">
+          <div class="code-editor-card">
+            <div class="code-editor-header">
+              <div>
+                <h4 class="voice-panel-title" id="code-workspace-title">Code Implementation Workspace</h4>
+                <p class="voice-panel-subtitle" id="code-workspace-subtitle">Write your technical solution below. Automatically evaluates after you pause typing.</p>
+              </div>
+              <span class="badge badge-primary" id="code-editor-badge">Code Evaluator</span>
+            </div>
+            <div class="code-snippet-box db-schema-box" id="db-schema-box" style="display: none;">
+              <div class="code-snippet-header">Database Schema (In-Memory Database Sandbox)</div>
+              <pre><code id="db-schema-content"></code></pre>
+            </div>
+            <textarea 
+              id="code-editor-input" 
+              class="code-textarea code-editor-tall" 
+              rows="12" 
+              placeholder="# Write your function implementation here..."
+              spellcheck="false"
+            ></textarea>
+            <div class="code-editor-footer">
+              <span class="editor-hint">Supports Tab indentation. Pausing typing initiates automatic evaluation countdown.</span>
+              <button type="button" class="btn btn-primary btn-sm" id="code-evaluate-now-btn">
+                <span>Evaluate Code Now</span>
+                <span class="btn-spinner" id="code-spinner" style="display: none;"></span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- WORKSPACE 3: CODE OUTPUT PREDICTION (Automatically revealed for Code Output questions) -->
+        <div class="workspace-panel" id="workspace-output" style="display: none;">
+          <div class="output-prediction-card">
+            <div class="output-prediction-header">
+              <h4 class="voice-panel-title">Predicted Code Output & Behavior</h4>
+              <p class="voice-panel-subtitle">Analyze the code snippet above, then type the exact printed output below.</p>
+            </div>
+            <textarea 
+              id="output-prediction-input" 
+              class="code-textarea output-input" 
+              rows="4" 
+              placeholder="e.g. 1 2 4 (Explain the loop execution and output order)..."
+              spellcheck="false"
+            ></textarea>
+            <div class="code-editor-footer">
+              <span class="editor-hint">Pausing typing initiates automatic evaluation countdown.</span>
+              <button type="button" class="btn btn-primary btn-sm" id="output-evaluate-now-btn">
+                <span>Evaluate Output Now</span>
+                <span class="btn-spinner" id="output-spinner" style="display: none;"></span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- VIEW 4: PERFORMANCE & INTELLIGENCE REPORT -->
+    <main id="report-view" class="view-panel">
+      <div class="report-hero">
+        <div class="report-hero-score">
+          <div class="score-circle">
+            <span class="score-number" id="report-normalized-score">0</span>
+            <span class="score-denominator">/ 100</span>
+          </div>
+          <div class="score-meta">
+            <div class="report-meta-badges">
+              <span class="badge badge-primary" id="report-role-badge">Technical Assessment</span>
+              <span class="report-grade-badge" id="report-grade-badge">Candidate Evaluation</span>
+              <button type="button" class="btn btn-primary btn-sm" id="hero-download-pdf-btn" style="margin-left: 0.75rem;">
+                📥 Download PDF Report
+              </button>
+            </div>
+            <h2 id="report-headline">Assessment Complete</h2>
+            <p id="report-meta-text">Completed all assessment questions • Total marks calculated from rubrics</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- REPORT METRICS GRIDS -->
+      <div class="report-grid">
+        <!-- TOPIC BREAKDOWN -->
+        <div class="report-card">
+          <h3>Topic Performance</h3>
+          <div class="breakdown-list" id="report-topic-breakdown"></div>
+        </div>
+
+        <!-- DIFFICULTY BREAKDOWN -->
+        <div class="report-card">
+          <h3>Difficulty Performance</h3>
+          <div class="breakdown-list" id="report-difficulty-breakdown"></div>
+        </div>
+
+        <!-- STRENGTHS & WEAKNESSES -->
+        <div class="report-card">
+          <h3>Demonstrated Competencies</h3>
+          <div class="competency-tags" id="report-strong-competencies"></div>
+
+          <h3 style="margin-top: 1.5rem;">Areas for Improvement</h3>
+          <div class="competency-tags" id="report-weak-competencies"></div>
+        </div>
+
+        <!-- RECOMMENDATIONS -->
+        <div class="report-card">
+          <h3>Examiner Recommendations</h3>
+          <ul class="recommendation-list" id="report-recommendations"></ul>
+
+          <h3 style="margin-top: 1.5rem;">Suggested Study Topics</h3>
+          <div class="competency-tags" id="report-study-topics"></div>
+        </div>
+      </div>
+
+      <!-- RESUME PROFILE & INTERVIEW PLAN CARD -->
+      <div class="report-card full-width" id="report-resume-plan-card" style="display: none; margin-bottom: 1.5rem;">
+        <div class="card-header-flex">
+          <div>
+            <h3>Candidate Profile & Assessment Agenda</h3>
+            <p class="history-subtitle">Candidate profile and original verification agenda established prior to interview.</p>
+          </div>
+          <span class="badge badge-primary" id="report-candidate-meta-badge">Profile Verified</span>
+        </div>
+        <p id="report-plan-summary-text" style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.95rem;"></p>
+        <div class="resume-skills-container" style="margin-bottom: 0.75rem;">
+          <span class="skills-label">Extracted Technical Competencies:</span>
+          <div class="resume-skills-chips" id="report-resume-skills-chips"></div>
+        </div>
+      </div>
+
+      <!-- RESUME TO INTERVIEW SKILL GAP INTELLIGENCE CARD -->
+      <div class="report-card full-width" id="report-skill-gap-card" style="display: none; margin-bottom: 2rem;">
+        <div class="card-header-flex">
+          <div>
+            <h3>Resume Claims vs. Interview Evidence (Skill Gap Intelligence)</h3>
+            <p class="history-subtitle">Cross-referencing candidate's resume claims against live interview evaluations and code execution tests.</p>
+          </div>
+          <span class="badge badge-primary" id="report-gap-summary-badge">Evidence Correlated</span>
+        </div>
+        <p id="report-gap-summary-text" style="color: var(--text-secondary); margin-bottom: 1.25rem; font-size: 0.95rem;"></p>
+        
+        <div class="skill-gap-grid" id="report-skill-gap-grid"></div>
+      </div>
+
+      <!-- DETAILED QUESTION HISTORY ACCORDION -->
+      <div class="report-history-card">
+        <h3>Question-by-Question Evaluation Audit</h3>
+        <p class="history-subtitle">Every awarded mark is traceable to specific rubric criteria and candidate evidence.</p>
+        <div class="history-accordion" id="report-history-accordion"></div>
+      </div>
+
+      <div class="action-footer report-actions-row">
+        <button type="button" class="btn btn-secondary btn-lg" id="download-pdf-btn">
+          <span>📥 Download PDF Report</span>
+        </button>
+        <button type="button" class="btn btn-primary btn-lg" id="restart-interview-btn">
+          <span>Start Another Assessment</span>
+        </button>
+      </div>
+    </main>
+  </div>
+
+    <script src="/static/app.js"></script>
+  <script type="module" src="/static/orbit3d.js"></script>
+</body>
+</html>

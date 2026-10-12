@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --paper: #f4f3ee;
+    --ink: #111210;
+    --charcoal: #1b1c17;
+    --lime: #c6ee2e;
+    --lime-deep: #8fb80f;
+    --line: rgba(17, 18, 16, 0.1);
+  }
+
+  * { border-color: rgba(17, 18, 16, 0.1); }
+
+  body {
+    background-color: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    overflow-x: hidden;
+  }
+
+  :focus-visible { outline: 2px solid var(--lime-deep); outline-offset: 2px; }
+
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #c9c8bf; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #a3a299; }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+  .bg-grid-pattern {
+    background-size: 40px 40px;
+    background-image:
+      linear-gradient(to right, rgba(17, 18, 16, 0.035) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(17, 18, 16, 0.035) 1px, transparent 1px);
+  }
+  .bg-dots-pattern {
+    background-image: radial-gradient(rgba(17, 18, 16, 0.14) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  .glass-panel {
+    background: #ffffff;
+    border: 1px solid rgba(17, 18, 16, 0.08);
+    border-radius: 1.25rem;
+    box-shadow: 0 1px 2px rgba(17, 18, 16, 0.04);
+  }
+  .glass-card {
+    background: #ffffff;
+    border: 1px solid rgba(17, 18, 16, 0.08);
+    box-shadow: 0 1px 2px rgba(17, 18, 16, 0.04);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+  }
+  .glass-card:hover {
+    border-color: rgba(17, 18, 16, 0.22);
+    box-shadow: 0 10px 28px -14px rgba(17, 18, 16, 0.2);
+  }
+
+  .glow-cyan { box-shadow: 0 6px 20px -8px rgba(143, 184, 15, 0.55); }
+  .glow-violet { box-shadow: 0 6px 20px -8px rgba(17, 18, 16, 0.35); }
+  .glow-text-cyan, .glow-text-violet { text-shadow: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

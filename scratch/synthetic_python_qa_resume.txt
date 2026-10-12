@@ -1,0 +1,15 @@
+
+Morgan Drake
+Backend Python Engineer
+morgan.drake@example.com
+
+SUMMARY
+5+ years experience building Python web APIs with FastAPI and relational databases with PostgreSQL/SQL.
+
+TECHNICAL SKILLS
+Python, FastAPI, SQL, PostgreSQL, Docker, Git
+
+EXPERIENCE
+Software Engineer | DataScale Systems (2021 - Present)
+- Developed REST APIs in Python and FastAPI.
+- Optimized database queries using SQL.

@@ -1,0 +1,85 @@
+# ==============================================================================
+# Adaptive Interview Intelligence - Root .gitignore
+# ==============================================================================
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+*.dll
+*.exe
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+
+# Local Runtime Caches & Dynamic State
+.recent_questions.json
+.recent_fullstack_questions.json
+resumeiq.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment Variables & Secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.cert
+*.crt
+# Preserve template files
+!.env.example
+!frontend/.env.example
+
+# Node.js / Frontend Build Outputs
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+dist-ssr/
+*.tsbuildinfo
+frontend/tsconfig.app.tsbuildinfo
+
+# Media, Audio & Large Binary Datasets
+*.wav
+*.mp3
+*.ogg
+*.flac
+*.mp4
+*.avi
+*.mov
+*.bin
+*.onnx
+
+# Logs & Temporary Files
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Operating System & Editor Metadata
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo

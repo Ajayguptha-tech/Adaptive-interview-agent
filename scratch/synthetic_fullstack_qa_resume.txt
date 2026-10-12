@@ -1,0 +1,15 @@
+
+Taylor Reed
+Full-Stack Software Engineer
+taylor.reed@example.com
+
+SUMMARY
+5+ years experience building web applications with modern JavaScript, React frontends, REST APIs, and SQL databases.
+
+TECHNICAL SKILLS
+JavaScript, React, REST APIs, SQL, Node.js, Express, HTML, CSS
+
+EXPERIENCE
+Full-Stack Developer | WebForge Labs (2021 - Present)
+- Engineered responsive React user interfaces with modern JavaScript.
+- Built Node.js and Express REST APIs with SQL relational persistence.

@@ -1,0 +1,14 @@
+Jordan Vance
+Senior Python Engineer
+jordan.vance@example.com
+
+SUMMARY:
+5+ years experience developing scalable backend systems, APIs, and databases using Python, FastAPI, and SQL.
+
+TECHNICAL SKILLS:
+Python, FastAPI, SQL, PostgreSQL, Docker, Git
+
+EXPERIENCE:
+Senior Software Engineer | CloudData Systems (2022 - Present)
+- Developed asynchronous microservices using FastAPI and PostgreSQL handling 10k req/min.
+- Optimized SQL database queries and data models in Python.

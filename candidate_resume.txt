@@ -1,0 +1,22 @@
+Alex Morgan
+Senior Full-Stack & Python Engineer
+alex.morgan@example.com | San Francisco, CA
+
+PROFESSIONAL SUMMARY
+Experienced software engineer with 6+ years specializing in Python backend architectures, FastAPI, React frontend development, and SQL database design.
+
+TECHNICAL SKILLS
+- Programming Languages: Python, JavaScript, TypeScript, SQL
+- Frameworks & Libraries: FastAPI, React, Node.js, Express, Redux
+- Databases & Storage: PostgreSQL, SQLite, Redis
+- Core Competencies: Concurrency & AsyncIO, RESTful APIs, OOP, Database Indexing, Unit Testing
+
+WORK EXPERIENCE
+Senior Full-Stack Developer | TechCore Labs (2022 - Present)
+- Architected high-throughput FastAPI microservices processing 5M+ requests daily with AsyncIO.
+- Developed dynamic responsive SPAs in React with state management and real-time WebSocket feeds.
+- Optimized PostgreSQL queries and database schemas, reducing p99 latency by 45%.
+
+Python Backend Engineer | DataSphere Inc (2019 - 2022)
+- Built automated ETL pipelines in Python using multiprocessing and generator pipelines.
+- Implemented robust error handling, custom exceptions, and structured logging.

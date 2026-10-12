@@ -1,0 +1,68 @@
+"""Pydantic schemas for ResumeIQ."""
+from .resume import (
+    ContactInfo,
+    EducationItem,
+    WorkExperienceItem,
+    ProjectItem,
+    CertificationItem,
+    AchievementItem,
+    LanguageItem,
+    SkillEvidenceItem,
+    ResumeParsedData,
+    ExtractionResponse,
+)
+from .integrity import (
+    IntegrityIssue,
+    IntegrityAuditResult,
+    SectionCompletenessItem,
+)
+from .job_description import (
+    JobDescriptionInput,
+    JobDescriptionParsed,
+)
+from .analysis import (
+    SkillMatchItem,
+    SkillsAnalysisResult,
+    CategoryScore,
+    ScoringBreakdown,
+    BulletRewrite,
+    ResumeImprovementResult,
+    AnalysisCreateRequest,
+    AnalysisSummaryResponse,
+    AnalysisDetailResponse,
+    ChatMessage,
+    ChatRequest,
+    ChatResponse,
+    SystemSettingsResponse,
+)
+
+__all__ = [
+    "ContactInfo",
+    "EducationItem",
+    "WorkExperienceItem",
+    "ProjectItem",
+    "CertificationItem",
+    "AchievementItem",
+    "LanguageItem",
+    "SkillEvidenceItem",
+    "ResumeParsedData",
+    "ExtractionResponse",
+    "IntegrityIssue",
+    "IntegrityAuditResult",
+    "SectionCompletenessItem",
+    "JobDescriptionInput",
+    "JobDescriptionParsed",
+    "SkillMatchItem",
+    "SkillsAnalysisResult",
+    "CategoryScore",
+    "ScoringBreakdown",
+    "BulletRewrite",
+    "ResumeImprovementResult",
+    "AnalysisCreateRequest",
+    "AnalysisSummaryResponse",
+    "AnalysisDetailResponse",
+    "ChatMessage",
+    "ChatRequest",
+    "ChatResponse",
+    "SystemSettingsResponse",
+]
