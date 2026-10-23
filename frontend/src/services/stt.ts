@@ -35,6 +35,9 @@ export class STTService {
   private static currentInterim: string = '';
   private static activeOptions: STTOptions | null = null;
   private static restartTimer: any = null;
+  private static consecutiveErrors: number = 0;
+  private static readonly MAX_CONSECUTIVE_ERRORS: number = 3;
+  private static hasStartedFired: boolean = false;
 
   /**
    * Check if SpeechRecognition is supported by user's browser
@@ -53,7 +56,7 @@ export class STTService {
    */
   static start(options: STTOptions = {}): boolean {
     if (!this.isSupported()) {
-      options.onError?.('SpeechRecognition API is not supported in this browser. Please use Google Chrome, Microsoft Edge, or audio upload fallback.');
+      options.onError?.('SpeechRecognition API is not supported in this browser. Microphone audio fallback will be used.');
       return false;
     }
 
@@ -65,6 +68,8 @@ export class STTService {
       this.currentInterim = '';
       this.isExplicitStop = false;
       this.isListening = true;
+      this.consecutiveErrors = 0;
+      this.hasStartedFired = false;
       this.activeOptions = options;
 
       return this.initSession();
@@ -78,7 +83,25 @@ export class STTService {
   }
 
   /**
-   * Initializes and starts a single SpeechRecognition session
+   * Detaches all listeners and safely tears down an existing recognition instance
+   */
+  private static detachExistingRecognition(): void {
+    if (this.recognition) {
+      try {
+        this.recognition.onstart = null;
+        this.recognition.onresult = null;
+        this.recognition.onerror = null;
+        this.recognition.onend = null;
+        this.recognition.abort();
+      } catch {
+        // Ignore abort errors
+      }
+      this.recognition = null;
+    }
+  }
+
+  /**
+   * Initializes and starts a fresh SpeechRecognition session
    */
   private static initSession(): boolean {
     if (!this.isListening || this.isExplicitStop) return false;
@@ -90,6 +113,9 @@ export class STTService {
     if (!SpeechRecognitionConstructor) return false;
 
     try {
+      // Never call start() on an ended instance — cleanly teardown previous instance
+      this.detachExistingRecognition();
+
       const rec = new SpeechRecognitionConstructor();
       rec.continuous = this.activeOptions?.continuous ?? true;
       rec.interimResults = true;
@@ -97,10 +123,15 @@ export class STTService {
 
       rec.onstart = () => {
         STTService.isListening = true;
-        STTService.activeOptions?.onStart?.();
+        STTService.consecutiveErrors = 0;
+        if (!STTService.hasStartedFired) {
+          STTService.hasStartedFired = true;
+          STTService.activeOptions?.onStart?.();
+        }
       };
 
       rec.onresult = (event: any) => {
+        STTService.consecutiveErrors = 0;
         let interimText = '';
 
         // Process SpeechRecognitionResultList index-by-index within current session
@@ -148,50 +179,87 @@ export class STTService {
       };
 
       rec.onerror = (event: any) => {
-        const errorKey = event.error || 'speech_recognition_error';
-        let errorMsg = 'Speech recognition error';
+        const errorKey = event?.error || 'speech_recognition_error';
 
-        if (errorKey === 'not-allowed') {
-          errorMsg = 'Microphone access denied. Please click "Enable Microphone" or grant permission in your browser.';
+        if (errorKey === 'not-allowed' || errorKey === 'service-not-allowed') {
           STTService.isListening = false;
-          STTService.activeOptions?.onError?.(errorMsg);
-        } else if (errorKey === 'no-speech') {
-          // Normal pause in speech; do not abort the session, allow onend to restart seamlessly
+          STTService.isExplicitStop = true;
+          STTService.activeOptions?.onError?.('Microphone access denied. Please grant microphone permission in your browser.');
           return;
-        } else if (errorKey === 'network') {
-          errorMsg = 'Network error during cloud speech recognition. Audio will be transcribed via backend fallback.';
-          STTService.activeOptions?.onError?.(errorMsg);
-        } else if (errorKey === 'aborted') {
+        }
+
+        if (errorKey === 'audio-capture') {
+          STTService.isListening = false;
+          STTService.isExplicitStop = true;
+          STTService.activeOptions?.onError?.('No microphone detected. Please connect an audio input device.');
+          return;
+        }
+
+        if (errorKey === 'no-speech') {
+          // Normal pause in speech; do not abort session, allow seamless bounded restart
+          return;
+        }
+
+        if (errorKey === 'aborted') {
           // Normal during stop/abort, ignore
           return;
-        } else {
-          STTService.activeOptions?.onError?.(errorMsg);
+        }
+
+        STTService.consecutiveErrors++;
+        if (errorKey === 'network') {
+          if (STTService.consecutiveErrors >= STTService.MAX_CONSECUTIVE_ERRORS) {
+            STTService.isListening = false;
+            STTService.isExplicitStop = true;
+            STTService.activeOptions?.onError?.('Speech recognition network error. Your answer will be transcribed from audio upon finishing.');
+          }
+          return;
+        }
+
+        if (STTService.consecutiveErrors >= STTService.MAX_CONSECUTIVE_ERRORS) {
+          STTService.isListening = false;
+          STTService.isExplicitStop = true;
+          STTService.activeOptions?.onError?.(`Speech recognition encountered repeated errors: ${errorKey}. Audio will be transcribed upon finishing.`);
         }
       };
 
       rec.onend = () => {
-        // If recognition closed unexpectedly or paused and candidate hasn't finished, restart
-        if (STTService.isListening && !STTService.isExplicitStop) {
-          const sessionFinal = STTService.currentSessionSegments.filter(Boolean).join(' ').trim();
-          if (sessionFinal) {
-            STTService.committedHistory = (
-              (STTService.committedHistory ? `${STTService.committedHistory} ` : '') + sessionFinal
-            ).trim();
-          }
-          STTService.currentSessionSegments = [];
+        // Flush any pending interim speech so words before pause are preserved
+        if (STTService.currentInterim && STTService.currentInterim.trim()) {
+          STTService.currentSessionSegments.push(STTService.currentInterim.trim());
           STTService.currentInterim = '';
+        }
+
+        const sessionFinal = STTService.currentSessionSegments.filter(Boolean).join(' ').trim();
+        if (sessionFinal) {
+          STTService.committedHistory = (
+            (STTService.committedHistory ? `${STTService.committedHistory} ` : '') + sessionFinal
+          ).trim();
+        }
+        STTService.currentSessionSegments = [];
+
+        // If recognition closed unexpectedly or paused and candidate hasn't finished, restart safely
+        if (
+          STTService.isListening && 
+          !STTService.isExplicitStop && 
+          STTService.consecutiveErrors < STTService.MAX_CONSECUTIVE_ERRORS
+        ) {
+          STTService.activeOptions?.onTranscriptUpdate?.({
+            finalText: STTService.committedHistory,
+            interimText: '',
+            fullText: STTService.committedHistory,
+          });
 
           clearTimeout(STTService.restartTimer);
           STTService.restartTimer = setTimeout(() => {
             if (STTService.isListening && !STTService.isExplicitStop) {
               STTService.initSession();
             }
-          }, 120);
+          }, 100);
           return;
         }
 
         STTService.isListening = false;
-        STTService.recognition = null;
+        STTService.detachExistingRecognition();
         STTService.activeOptions?.onEnd?.();
       };
 
@@ -200,6 +268,10 @@ export class STTService {
       return true;
     } catch (err) {
       console.warn('STT session init error:', err);
+      STTService.consecutiveErrors++;
+      if (STTService.consecutiveErrors >= STTService.MAX_CONSECUTIVE_ERRORS) {
+        STTService.isListening = false;
+      }
       return false;
     }
   }
@@ -219,20 +291,16 @@ export class STTService {
     }
 
     const sessionFinal = this.currentSessionSegments.filter(Boolean).join(' ').trim();
-    const completeFinal = (
-      (this.committedHistory ? `${this.committedHistory} ` : '') + sessionFinal
-    ).trim();
-
-    if (this.recognition) {
-      try {
-        this.recognition.stop();
-      } catch {
-        // Ignore if already inactive
-      }
-      this.recognition = null;
+    if (sessionFinal) {
+      this.committedHistory = (
+        (this.committedHistory ? `${this.committedHistory} ` : '') + sessionFinal
+      ).trim();
     }
+    this.currentSessionSegments = [];
 
-    return completeFinal;
+    this.detachExistingRecognition();
+
+    return this.committedHistory;
   }
 
   /**
@@ -242,14 +310,7 @@ export class STTService {
     this.isExplicitStop = true;
     this.isListening = false;
     clearTimeout(this.restartTimer);
-    if (this.recognition) {
-      try {
-        this.recognition.abort();
-      } catch {
-        // Ignore
-      }
-      this.recognition = null;
-    }
+    this.detachExistingRecognition();
     this.currentInterim = '';
   }
 
@@ -262,6 +323,8 @@ export class STTService {
     this.currentSessionSegments = [];
     this.currentInterim = '';
     this.activeOptions = null;
+    this.consecutiveErrors = 0;
+    this.hasStartedFired = false;
   }
 
   /**

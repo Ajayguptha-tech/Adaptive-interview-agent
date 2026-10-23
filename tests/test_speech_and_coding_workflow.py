@@ -277,6 +277,48 @@ class TestSpeechBridgeBuiltin:
             if os.path.exists(wav_path):
                 os.remove(wav_path)
 
+    def test_builtin_speech_assistant_handles_empty_or_corrupt_file(self):
+        from backend.speech_bridge import BuiltinSpeechAssistant
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(b"")
+            empty_path = f.name
+
+        try:
+            assistant = BuiltinSpeechAssistant()
+            result = assistant.transcribe_file(empty_path)
+            assert result.is_success is False
+            assert "empty" in result.error_message.lower() or "too short" in result.error_message.lower()
+        finally:
+            import os
+            if os.path.exists(empty_path):
+                os.remove(empty_path)
+
+    def test_transcribe_upload_empty_file_returns_error(self):
+        from fastapi.testclient import TestClient
+        from backend.main import app, session_manager
+        from backend.models import StartInterviewRequest, InterviewMode, FeedbackMode
+
+        client = TestClient(app)
+        req = StartInterviewRequest(
+            role="Python Developer",
+            track="python",
+            max_questions=3,
+            dynamic_questions=False,
+            difficulty_mode=InterviewMode.BEGINNER,
+            feedback_mode=FeedbackMode.IMMEDIATE,
+        )
+        session = session_manager.start_session(req)
+        session_id = session.session_id
+
+        resp = client.post(
+            f"/api/interview/{session_id}/transcribe_upload",
+            files={"file": ("answer_audio.wav", b"", "audio/wav")}
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["is_success"] is False
+        assert "empty" in data["error_message"].lower() or "short" in data["error_message"].lower()
+
 
 class TestQuestionGeneratorFastFallback:
     """Verifies fast fallback when LLM service is disconnected."""

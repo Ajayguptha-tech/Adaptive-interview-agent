@@ -148,6 +148,91 @@ describe('Speech-to-Text (STT) Segmented Transcription & Idempotency', () => {
     const stopped = STTService.stop();
     expect(stopped).toBe('Global interpreter lock ensures thread safety');
   });
+
+  it('preserves transcript across several pauses without duplication', async () => {
+    vi.useFakeTimers();
+    let transcriptState: any = null;
+
+    STTService.start({
+      onTranscriptUpdate: (state) => {
+        transcriptState = state;
+      },
+    });
+
+    let rec = (STTService as any).recognition as MockSpeechRecognition;
+    expect(rec).toBeTruthy();
+
+    // Utterance 1 before pause
+    const seg1 = [{ transcript: 'First part of speech' }];
+    (seg1 as any).isFinal = true;
+    rec.onresult?.({ results: [seg1] });
+
+    // Browser pauses -> onend fires
+    rec.onend?.();
+
+    // Advance timer for seamless restart
+    vi.advanceTimersByTime(150);
+
+    // New recognition instance was created
+    rec = (STTService as any).recognition as MockSpeechRecognition;
+    expect(rec).toBeTruthy();
+
+    // Utterance 2 after first pause
+    const seg2 = [{ transcript: 'second part of speech' }];
+    (seg2 as any).isFinal = true;
+    rec.onresult?.({ results: [seg2] });
+
+    // Browser pauses again -> onend fires
+    rec.onend?.();
+    vi.advanceTimersByTime(150);
+
+    // Utterance 3 after second pause
+    rec = (STTService as any).recognition as MockSpeechRecognition;
+    const seg3 = [{ transcript: 'third final sentence' }];
+    (seg3 as any).isFinal = true;
+    rec.onresult?.({ results: [seg3] });
+
+    // Finish Answer stopped
+    const finalAnswer = STTService.stop();
+    expect(finalAnswer).toBe('First part of speech second part of speech third final sentence');
+    expect(STTService.getIsListening()).toBe(false);
+
+    vi.useRealTimers();
+  });
+
+  it('stops restart loop boundedly after reaching maximum consecutive errors', () => {
+    let errorReported = '';
+    STTService.start({
+      onError: (err) => {
+        errorReported = err;
+      },
+    });
+
+    const rec = (STTService as any).recognition as MockSpeechRecognition;
+
+    // Simulate 3 consecutive network errors
+    rec.onerror?.({ error: 'network' });
+    rec.onerror?.({ error: 'network' });
+    rec.onerror?.({ error: 'network' });
+
+    expect(STTService.getIsListening()).toBe(false);
+    expect(errorReported).toContain('network');
+  });
+
+  it('stops listening immediately on permission denial without restarting', () => {
+    let errorReported = '';
+    STTService.start({
+      onError: (err) => {
+        errorReported = err;
+      },
+    });
+
+    const rec = (STTService as any).recognition as MockSpeechRecognition;
+    rec.onerror?.({ error: 'not-allowed' });
+
+    expect(STTService.getIsListening()).toBe(false);
+    expect(errorReported).toContain('Microphone access denied');
+  });
 });
 
 describe('Question Classification: Coding vs Verbal Tasks', () => {

@@ -1028,6 +1028,14 @@ async def transcribe_uploaded_audio(session_id: str, file: UploadFile = File(...
     temp_path = temp_file.name
     try:
         content = await file.read()
+        if not content or len(content) == 0:
+            temp_file.close()
+            return {
+                "session_id": session_id,
+                "is_success": False,
+                "transcript": "",
+                "error_message": "Uploaded audio file was empty.",
+            }
         temp_file.write(content)
         temp_file.close()
 

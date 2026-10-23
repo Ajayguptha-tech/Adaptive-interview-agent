@@ -135,7 +135,7 @@ export const CandidateInterviewFlow: React.FC = () => {
   useEffect(() => {
     return () => {
       TTSService.cancel();
-      STTService.stop();
+      STTService.abort();
     };
   }, []);
 
@@ -208,6 +208,9 @@ export const CandidateInterviewFlow: React.FC = () => {
         setVoiceState('error');
         return;
       }
+      setIsRecordingConfirmed(true);
+      setVoiceState('recording');
+
       const sttStarted = STTService.start({
         onStart: () => {
           setIsRecordingConfirmed(true);
@@ -224,13 +227,13 @@ export const CandidateInterviewFlow: React.FC = () => {
           setMicError(err);
         },
         onEnd: () => {
-          setIsRecordingConfirmed(false);
+          // Continuous answering: do not cancel user recording state on pause
         },
       });
 
       if (!sttStarted) {
-        setIsRecordingConfirmed(false);
-        setMicError('Speech recognition is unavailable or not supported in this browser. Please use text entry.');
+        // Fallback: Web Audio / MediaRecorder is recording PCM audio and will transcribe on Finish Answer
+        console.info('Streaming Web Speech API not active; audio fallback will transcribe on Finish Answer.');
       }
     } catch (e: any) {
       console.warn('Microphone auto-start error:', e);
@@ -368,7 +371,7 @@ export const CandidateInterviewFlow: React.FC = () => {
   };
 
   const handleFinishAnswer = async () => {
-    if (isSubmitting || voiceState === 'evaluating' || voiceState === 'transcribing') {
+    if (isSubmitting || voiceState === 'evaluating' || voiceState === 'transcribing' || voiceState === 'saving_result') {
       return;
     }
 
@@ -395,11 +398,12 @@ export const CandidateInterviewFlow: React.FC = () => {
 
     // If verbal question has no transcript yet from Web Speech API, but audio was recorded,
     // upload to backend for server-side transcription fallback
-    if (!isCodingQuestion && !answerToSubmit && recordedBlob && recordedBlob.size > 500 && backendSessionId) {
+    if (!isCodingQuestion && !answerToSubmit && recordedBlob && recordedBlob.size > 100 && backendSessionId) {
       try {
         setVoiceState('transcribing');
         const formData = new FormData();
-        const ext = recordedBlob.type.includes('webm') ? 'webm' : (recordedBlob.type.includes('ogg') ? 'ogg' : 'wav');
+        const isWav = recordedBlob.type.includes('wav');
+        const ext = isWav ? 'wav' : (recordedBlob.type.includes('ogg') ? 'ogg' : 'webm');
         formData.append('file', recordedBlob, `answer_audio.${ext}`);
         const txResp = await apiRequest<{ is_success: boolean; transcript: string; error_message?: string }>(
           `api/interview/${backendSessionId}/transcribe_upload`,
@@ -408,13 +412,16 @@ export const CandidateInterviewFlow: React.FC = () => {
             body: formData,
           }
         );
-        if (txResp?.is_success && txResp.transcript) {
+        if (txResp?.is_success && txResp.transcript?.trim()) {
           answerToSubmit = txResp.transcript.trim();
           setFinalTranscript(answerToSubmit);
           setAnswerText(answerToSubmit);
+        } else if (txResp?.error_message) {
+          setSubmitError(txResp.error_message);
         }
-      } catch (sttErr) {
+      } catch (sttErr: any) {
         console.warn('Backend audio transcription fallback failed:', sttErr);
+        setSubmitError(sttErr?.message || 'Server audio transcription failed. Please speak clearly or enter your answer.');
       }
     }
 

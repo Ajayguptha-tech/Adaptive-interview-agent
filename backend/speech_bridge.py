@@ -70,6 +70,10 @@ class BuiltinSpeechAssistant:
         if not os.path.exists(audio_path):
             return Result(False, "", "Audio file not found.")
 
+        file_size = os.path.getsize(audio_path)
+        if file_size == 0:
+            return Result(False, "", "Audio file is empty.")
+
         try:
             sr = self._get_sr()
         except ImportError as exc:
@@ -90,6 +94,16 @@ class BuiltinSpeechAssistant:
             converted = True
         except Exception as conv_err:
             logger.info(f"Direct WAV processing without soundfile conversion: {conv_err}")
+            is_riff = False
+            try:
+                with open(audio_path, "rb") as f:
+                    header = f.read(12)
+                    if header.startswith(b"RIFF") and header[8:12] == b"WAVE":
+                        is_riff = True
+            except Exception:
+                pass
+            if not is_riff:
+                return Result(False, "", f"Audio format not supported by backend decoder: {conv_err}")
 
         recognizer = sr.Recognizer()
         try:
