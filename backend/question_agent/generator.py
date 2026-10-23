@@ -543,15 +543,25 @@ If code/debugging is required, populate code_snippet or test_cases concisely. Ke
                 return json.dumps(val)
             return str(val).strip()
 
+        code_snip = _safe_str(data.get("code_snippet"))
+        starter = _safe_str(data.get("starter_code"))
+        is_coding = bool(
+            q_type == QuestionType.CODE_WRITING
+            or (q_type == QuestionType.DEBUGGING and bool(code_snip or starter))
+        )
+        resp_type = "code_writing" if q_type == QuestionType.CODE_WRITING else ("debugging" if is_coding else "verbal")
+
         return Question(
             id=qid,
             topic=str(data.get("topic") or fallback_topic),
             competency=str(data.get("competency") or "Technical Competency"),
             difficulty=diff,
             question_type=q_type,
+            response_type=resp_type,
+            requires_code=is_coding,
             text=text,
-            code_snippet=_safe_str(data.get("code_snippet")),
-            starter_code=_safe_str(data.get("starter_code")),
+            code_snippet=code_snip,
+            starter_code=starter,
             function_name=_safe_str(data.get("function_name")),
             expected_output=_safe_str(data.get("expected_output")),
             test_cases=test_cases,

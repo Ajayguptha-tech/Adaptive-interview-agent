@@ -44,7 +44,7 @@ FORMAT_TO_QUESTION_TYPE: Dict[QuestionFormat, QuestionType] = {
     QuestionFormat.OUTPUT_PREDICTION: QuestionType.CODE_OUTPUT,
     QuestionFormat.DESIGN_ARCHITECTURE: QuestionType.SCENARIO,
     QuestionFormat.PROJECT_DEEP_DIVE: QuestionType.SCENARIO,
-    QuestionFormat.TROUBLESHOOTING_SCENARIO: QuestionType.DEBUGGING,
+    QuestionFormat.TROUBLESHOOTING_SCENARIO: QuestionType.SCENARIO,
     QuestionFormat.TRADEOFF_DECISION: QuestionType.PRACTICAL,
     QuestionFormat.APPLIED_REAL_WORLD: QuestionType.PRACTICAL,
     QuestionFormat.ADAPTIVE_FOLLOW_UP: QuestionType.FOLLOW_UP,

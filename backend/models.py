@@ -100,7 +100,15 @@ class Question(BaseModel):
         question_number: int = 1,
         total_questions: int = 5,
     ) -> QuestionDisplay:
-        req_code = bool(self.requires_code or self.question_type in (QuestionType.CODE_WRITING, QuestionType.DEBUGGING))
+        # A question requires code ONLY if:
+        # 1. explicitly flagged requires_code is True
+        # 2. question_type is CODE_WRITING
+        # 3. question_type is DEBUGGING AND (has code_snippet or starter_code)
+        req_code = bool(
+            self.requires_code
+            or self.question_type == QuestionType.CODE_WRITING
+            or (self.question_type == QuestionType.DEBUGGING and bool(self.code_snippet or self.starter_code))
+        )
         if req_code:
             resp_type = "code_writing" if self.question_type == QuestionType.CODE_WRITING else "debugging"
         elif self.question_type == QuestionType.CODE_OUTPUT:

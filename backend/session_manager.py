@@ -487,9 +487,10 @@ class SessionManager:
         self,
         evaluation_engine: Optional[EvaluationEngine] = None,
         registry: Optional[InterviewerRegistry] = None,
+        persistence: Optional[Any] = None,
     ):
         from backend.session_persistence import SessionPersistence
-        self.persistence = SessionPersistence()
+        self.persistence = persistence or SessionPersistence()
         self.sessions: Dict[str, InterviewSession] = {}
         self.eval_engine = evaluation_engine or EvaluationEngine()
         if registry is not None:

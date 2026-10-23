@@ -130,7 +130,13 @@ export class InterviewService {
 
     const rawQD = res.question_details || {};
     const requiresCode = Boolean(
-      res.requires_code ?? rawQD.requires_code ?? (res.question_type === 'code_writing' || rawQD.question_type === 'code_writing' || res.question_type === 'debugging' || rawQD.question_type === 'debugging')
+      res.requires_code ?? rawQD.requires_code ?? (
+        res.response_type === 'code_writing' ||
+        rawQD.response_type === 'code_writing' ||
+        res.question_type === 'code_writing' ||
+        rawQD.question_type === 'code_writing' ||
+        (res.question_type === 'debugging' && (res.code_snippet || res.starter_code))
+      )
     );
     const questionObj: BackendQuestion = {
       question_id: rawQD.question_id || rawQD.id || res.question_id || 'q-1',
@@ -142,6 +148,7 @@ export class InterviewService {
       code_snippet: rawQD.code_snippet || res.code_snippet || undefined,
       expected_answer_format: requiresCode ? 'code' : 'verbal',
       requires_code: requiresCode,
+      response_type: rawQD.response_type || res.response_type || (requiresCode ? 'code_writing' : 'verbal'),
       starter_code: rawQD.starter_code || res.starter_code || undefined,
       language: rawQD.language || res.language || 'python',
       topic: rawQD.topic || res.topic || 'Engineering Competency',
@@ -175,7 +182,11 @@ export class InterviewService {
     if (res.next_question_details) {
       const nq = res.next_question_details;
       const nqRequiresCode = Boolean(
-        nq.requires_code ?? (nq.question_type === 'code_writing' || nq.question_type === 'debugging')
+        nq.requires_code ?? (
+          nq.response_type === 'code_writing' ||
+          nq.question_type === 'code_writing' ||
+          (nq.question_type === 'debugging' && (nq.code_snippet || nq.starter_code))
+        )
       );
       nextQuestionObj = {
         question_id: nq.id || nq.question_id || `q-${res.question_number + 1}`,
@@ -187,6 +198,7 @@ export class InterviewService {
         code_snippet: nq.code_snippet || undefined,
         expected_answer_format: nqRequiresCode ? 'code' : 'verbal',
         requires_code: nqRequiresCode,
+        response_type: nq.response_type || (nqRequiresCode ? 'code_writing' : 'verbal'),
         starter_code: nq.starter_code || undefined,
         language: nq.language || 'python',
         topic: nq.topic || res.next_competency || 'Engineering Competency',

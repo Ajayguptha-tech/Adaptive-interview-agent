@@ -142,16 +142,8 @@ export const LiveInterviewScreen: React.FC = () => {
       const started = await startRecording();
       if (started) {
         STTService.start({
-          onInterimResult: (interim) => {
-            setTranscriptText(prev => {
-              // Combine existing finalized sentences with interim
-              return prev ? `${prev} ${interim}` : interim;
-            });
-          },
-          onFinalResult: (final) => {
-            setTranscriptText(prev => {
-              return prev ? `${prev} ${final}` : final;
-            });
+          onTranscriptUpdate: (state) => {
+            setTranscriptText(state.fullText);
           },
           onError: (err) => {
             console.warn('STT Error:', err);

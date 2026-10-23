@@ -80,7 +80,8 @@ interface InterviewContextType {
   // Actions
   uploadResumeFile: (file: File, targetRole: string) => Promise<BackendResumeUploadResponse>;
   startBackendSession: (options: { mode: 'mock' | 'predefined'; count: number; difficulty?: string }) => Promise<void>;
-  submitAnswerToBackend: (answerText: string, language?: string) => Promise<BackendAnswerResponse>;
+  submitAnswerToBackend: (answerText: string, language?: string, autoAdvance?: boolean) => Promise<BackendAnswerResponse>;
+  advanceToNextBackendQuestion: (nextQ?: BackendQuestion | null) => void;
   endBackendSession: () => Promise<BackendFinalReport | null>;
   downloadPdfReport: () => Promise<void>;
   
@@ -346,9 +347,37 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   /**
+  /**
+   * Advance to the next backend question explicitly after candidate feedback review
+   */
+  const advanceToNextBackendQuestion = (nextQ?: BackendQuestion | null) => {
+    if (nextQ) {
+      setBackendQuestion(nextQ);
+      const mappedNext: InterviewQuestion = {
+        id: nextQ.question_id,
+        order: nextQ.question_number,
+        text: nextQ.text,
+        category: 'technical',
+        targetCompetencies: [nextQ.topic || 'Engineering Competency'],
+        difficulty: (nextQ.difficulty as any) || 'intermediate',
+      };
+      setCurrentQuestion(mappedNext);
+      setQuestionHistory(prev => [...prev, mappedNext]);
+      addAgentLog('interviewer', 'Next Question Loaded', `Q${nextQ.question_number}: ${nextQ.text.substring(0, 60)}...`);
+    } else {
+      addAgentLog('interviewer', 'Interview Concluded', 'All questions answered. Generating final report.');
+      endBackendSession();
+    }
+  };
+
+  /**
    * BACKEND ACTION 3: Submit answer to FastAPI backend
    */
-  const submitAnswerToBackend = async (answerText: string, language: string = 'python'): Promise<BackendAnswerResponse> => {
+  const submitAnswerToBackend = async (
+    answerText: string, 
+    language: string = 'python',
+    autoAdvance: boolean = true
+  ): Promise<BackendAnswerResponse> => {
     if (!backendSessionId) throw new Error('No active backend session');
 
     setIsEvaluating(true);
@@ -379,22 +408,13 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       };
       setEvidenceList(prev => [ev, ...prev]);
 
-      if (resp.next_question) {
-        setBackendQuestion(resp.next_question);
-        const mappedNext: InterviewQuestion = {
-          id: resp.next_question.question_id,
-          order: resp.next_question.question_number,
-          text: resp.next_question.text,
-          category: 'technical',
-          targetCompetencies: [resp.next_question.topic || 'Engineering Competency'],
-          difficulty: (resp.next_question.difficulty as any) || 'intermediate',
-        };
-        setCurrentQuestion(mappedNext);
-        setQuestionHistory(prev => [...prev, mappedNext]);
-        addAgentLog('interviewer', 'Next Question Loaded', `Q${resp.next_question.question_number}: ${resp.next_question.text.substring(0, 60)}...`);
-      } else if (resp.is_complete) {
-        addAgentLog('interviewer', 'Interview Concluded', 'All questions answered. Generating final report.');
-        await endBackendSession();
+      if (autoAdvance) {
+        if (resp.next_question) {
+          advanceToNextBackendQuestion(resp.next_question);
+        } else if (resp.is_complete) {
+          addAgentLog('interviewer', 'Interview Concluded', 'All questions answered. Generating final report.');
+          await endBackendSession();
+        }
       }
 
       return resp;
@@ -597,6 +617,7 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         uploadResumeFile,
         startBackendSession,
         submitAnswerToBackend,
+        advanceToNextBackendQuestion,
         endBackendSession,
         downloadPdfReport,
         selectCandidate,

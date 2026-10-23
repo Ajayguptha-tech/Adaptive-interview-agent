@@ -34,11 +34,23 @@ import {
   ShieldCheck
 } from 'lucide-react';
 
+export type VoiceInterviewState =
+  | 'question_ready'
+  | 'speaking_question'
+  | 'recording'
+  | 'transcribing'
+  | 'evaluating'
+  | 'saving_result'
+  | 'feedback_ready'
+  | 'next_question'
+  | 'error';
+
 export const CandidateInterviewFlow: React.FC = () => {
   const {
     uploadResumeFile,
     startBackendSession,
     submitAnswerToBackend,
+    advanceToNextBackendQuestion,
     endBackendSession,
     downloadPdfReport,
     backendResumeData,
@@ -64,17 +76,23 @@ export const CandidateInterviewFlow: React.FC = () => {
   const [interviewMode, setInterviewMode] = useState<'mock' | 'predefined'>('mock');
   const [questionCount, setQuestionCount] = useState<number>(5);
   const [answerText, setAnswerText] = useState<string>('');
+  const [finalTranscript, setFinalTranscript] = useState<string>('');
+  const [interimTranscript, setInterimTranscript] = useState<string>('');
   const [codeAnswer, setCodeAnswer] = useState<string>('');
   const [manualEditMode, setManualEditMode] = useState<boolean>(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [micError, setMicError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-  const [interviewStep, setInterviewStep] = useState<'idle' | 'reading' | 'listening' | 'transcribing' | 'evaluating'>('idle');
+  const [voiceState, setVoiceState] = useState<VoiceInterviewState>('question_ready');
+  const [isRecordingConfirmed, setIsRecordingConfirmed] = useState<boolean>(false);
+  const [pendingNextQuestion, setPendingNextQuestion] = useState<any>(null);
   const [lastFeedback, setLastFeedback] = useState<{
     score: number;
     maxMarks: number;
     percentage: number;
     feedback: string;
     demonstrated: string[];
+    isComplete?: boolean;
   } | null>(null);
   const [isSpeakingTTS, setIsSpeakingTTS] = useState<boolean>(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState<boolean>(false);
@@ -95,7 +113,8 @@ export const CandidateInterviewFlow: React.FC = () => {
 
   // Determine if active question requires code
   const isCodingQuestion = Boolean(
-    backendQuestion?.requires_code || 
+    backendQuestion?.requires_code === true || 
+    backendQuestion?.response_type === 'code_writing' ||
     backendQuestion?.type === 'code_writing' || 
     backendQuestion?.expected_answer_format === 'code'
   );
@@ -133,54 +152,90 @@ export const CandidateInterviewFlow: React.FC = () => {
     if (stage === 'interview' && backendQuestion && backendQuestion.question_id !== currentQuestionIdRef.current) {
       currentQuestionIdRef.current = backendQuestion.question_id;
       setAnswerText('');
+      setFinalTranscript('');
+      setInterimTranscript('');
       setCodeAnswer(backendQuestion.starter_code || '');
       setManualEditMode(false);
       setSubmitError(null);
+      setMicError(null);
+      setIsRecordingConfirmed(false);
 
-      if (backendQuestion.requires_code || backendQuestion.type === 'code_writing') {
+      const requiresCode = Boolean(
+        backendQuestion.requires_code === true || 
+        backendQuestion.response_type === 'code_writing' ||
+        backendQuestion.type === 'code_writing' || 
+        backendQuestion.expected_answer_format === 'code'
+      );
+
+      if (requiresCode) {
         // Coding question: show editor, wait for candidate typing
-        setInterviewStep('idle');
+        setVoiceState('question_ready');
         TTSService.cancel();
         setIsSpeakingTTS(false);
       } else {
         // Verbal question: auto-read question, then auto-enable mic
-        setInterviewStep('reading');
+        setVoiceState('speaking_question');
         setIsSpeakingTTS(true);
         TTSService.speak(backendQuestion.text, {
           onStart: () => {
             setIsSpeakingTTS(true);
-            setInterviewStep('reading');
+            setVoiceState('speaking_question');
           },
           onEnd: () => {
             setIsSpeakingTTS(false);
-            autoStartRecording();
+            startMicrophoneRecording();
           },
           onError: () => {
             setIsSpeakingTTS(false);
-            autoStartRecording();
+            startMicrophoneRecording();
           },
         });
       }
     }
   }, [stage, backendQuestion]);
 
-  const autoStartRecording = async () => {
-    setInterviewStep('listening');
+  const startMicrophoneRecording = async () => {
+    if (TTSService.isSpeaking()) {
+      TTSService.cancel();
+      setIsSpeakingTTS(false);
+    }
+    setMicError(null);
     try {
       const started = await startRecording();
-      if (started) {
-        STTService.start({
-          onInterimResult: (interim) => {
-            setAnswerText(prev => (prev ? `${prev} ${interim}` : interim));
-          },
-          onFinalResult: (final) => {
-            setAnswerText(prev => (prev ? `${prev} ${final}` : final));
-          },
-          onError: (err) => console.warn('STT Error:', err),
-        });
+      if (!started) {
+        setMicError('Microphone could not be accessed. Please ensure microphone permissions are granted.');
+        setVoiceState('error');
+        return;
       }
-    } catch (e) {
+      const sttStarted = STTService.start({
+        onStart: () => {
+          setIsRecordingConfirmed(true);
+          setVoiceState('recording');
+          setMicError(null);
+        },
+        onTranscriptUpdate: ({ finalText, interimText, fullText }) => {
+          setFinalTranscript(finalText);
+          setInterimTranscript(interimText);
+          setAnswerText(fullText);
+        },
+        onError: (err) => {
+          console.warn('STT Error:', err);
+          setMicError(err);
+        },
+        onEnd: () => {
+          setIsRecordingConfirmed(false);
+        },
+      });
+
+      if (!sttStarted) {
+        setIsRecordingConfirmed(false);
+        setMicError('Speech recognition is unavailable or not supported in this browser. Please use text entry.');
+      }
+    } catch (e: any) {
       console.warn('Microphone auto-start error:', e);
+      setIsRecordingConfirmed(false);
+      setMicError(e?.message || 'Failed to activate microphone');
+      setVoiceState('error');
     }
   };
 
@@ -275,108 +330,134 @@ export const CandidateInterviewFlow: React.FC = () => {
     if (isSpeakingTTS || TTSService.isSpeaking()) {
       TTSService.cancel();
       setIsSpeakingTTS(false);
-      if (interviewStep === 'reading') {
-        autoStartRecording();
+      if (voiceState === 'speaking_question') {
+        startMicrophoneRecording();
       }
     } else {
+      if (isRecording || isRecordingConfirmed) {
+        stopRecording();
+        STTService.stop();
+        setIsRecordingConfirmed(false);
+      }
       setIsSpeakingTTS(true);
-      setInterviewStep('reading');
+      setVoiceState('speaking_question');
       TTSService.speak(backendQuestion.text, {
         onStart: () => setIsSpeakingTTS(true),
         onEnd: () => {
           setIsSpeakingTTS(false);
-          autoStartRecording();
+          startMicrophoneRecording();
         },
         onError: () => {
           setIsSpeakingTTS(false);
-          autoStartRecording();
+          startMicrophoneRecording();
         },
       });
     }
   };
 
   const handleToggleVoiceRecord = async () => {
-    if (isRecording) {
+    if (isRecording || isRecordingConfirmed) {
       await stopRecording();
       STTService.stop();
-      setInterviewStep('idle');
+      setIsRecordingConfirmed(false);
+      setVoiceState('question_ready');
     } else {
-      const started = await startRecording();
-      if (started) {
-        setInterviewStep('listening');
-        STTService.start({
-          onInterimResult: (interim) => {
-            setAnswerText(prev => (prev ? `${prev} ${interim}` : interim));
-          },
-          onFinalResult: (final) => {
-            setAnswerText(prev => (prev ? `${prev} ${final}` : final));
-          },
-          onError: (err) => console.warn('STT Error:', err),
-        });
-      }
+      await startMicrophoneRecording();
     }
   };
 
   const handleFinishAnswer = async () => {
-    if (isRecording) {
-      await stopRecording();
-      STTService.stop();
+    if (isSubmitting || voiceState === 'evaluating' || voiceState === 'transcribing') {
+      return;
     }
+
+    setIsSubmitting(true);
+    setVoiceState('transcribing');
+    setSubmitError(null);
+
+    // Stop mic exactly once
+    if (isRecording || isRecordingConfirmed) {
+      await stopRecording();
+      setIsRecordingConfirmed(false);
+    }
+    const flushedSTT = STTService.stop();
     if (TTSService.isSpeaking()) {
       TTSService.cancel();
       setIsSpeakingTTS(false);
     }
 
     const domText = (document.getElementById('transcript-input') as HTMLTextAreaElement)?.value || '';
-    const answerToSubmit = isCodingQuestion ? (codeAnswer || domText) : (answerText || domText);
-    const trimmed = answerToSubmit.trim();
+    const answerToSubmit = isCodingQuestion 
+      ? (codeAnswer || domText).trim() 
+      : (flushedSTT || finalTranscript || interimTranscript || answerText || domText).trim();
 
-    if (!trimmed) {
+    if (!answerToSubmit) {
       setSubmitError(
         isCodingQuestion
           ? 'Please enter your program code before submitting.'
-          : 'Please speak your answer before finishing (or edit transcript).'
+          : 'Please speak your answer before finishing (or use the transcript editor).'
       );
-      setInterviewStep(isCodingQuestion ? 'idle' : 'listening');
+      setIsSubmitting(false);
+      setVoiceState(isCodingQuestion ? 'question_ready' : 'recording');
       return;
     }
 
-    setIsSubmitting(true);
-    setInterviewStep('evaluating');
-    setSubmitError(null);
+    setVoiceState('evaluating');
 
     try {
-      const resp = await submitAnswerToBackend(trimmed);
-      
-      // Save feedback to display immediately
+      // Submit answer to backend with autoAdvance = false so candidate can review rubric feedback
+      const resp = await submitAnswerToBackend(
+        answerToSubmit, 
+        backendQuestion?.language || 'python', 
+        false
+      );
+
+      setVoiceState('saving_result');
+
       setLastFeedback({
         score: resp.marks_awarded,
         maxMarks: resp.max_marks,
         percentage: resp.percentage,
         feedback: resp.feedback,
         demonstrated: resp.rubric_breakdown?.map(r => r.criterion) || [],
+        isComplete: Boolean(resp.is_complete || !resp.next_question),
       });
 
-      setAnswerText('');
-      setCodeAnswer('');
+      setPendingNextQuestion(resp.next_question || null);
+      setVoiceState('feedback_ready');
       resetRecording();
-
-      if (resp.is_complete || !resp.next_question) {
-        setStage('completed');
-      }
     } catch (err: any) {
       setSubmitError(err.message || 'Error evaluating answer. Please try again.');
-      setInterviewStep(isCodingQuestion ? 'idle' : 'listening');
+      setVoiceState(isCodingQuestion ? 'question_ready' : 'recording');
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  const handleContinueNextQuestion = () => {
+    if (lastFeedback?.isComplete || !pendingNextQuestion) {
+      setStage('completed');
+      return;
+    }
+
+    setVoiceState('next_question');
+    const nq = pendingNextQuestion;
+    setPendingNextQuestion(null);
+    setLastFeedback(null);
+    setFinalTranscript('');
+    setInterimTranscript('');
+    setAnswerText('');
+    setCodeAnswer('');
+    resetRecording();
+    advanceToNextBackendQuestion(nq);
+  };
+
   const handleEndEarly = async () => {
     if (window.confirm('Are you sure you want to conclude the interview and view your final report?')) {
-      if (isRecording) {
+      if (isRecording || isRecordingConfirmed) {
         await stopRecording();
         STTService.stop();
+        setIsRecordingConfirmed(false);
       }
       TTSService.cancel();
       setIsSubmitting(true);
@@ -408,10 +489,14 @@ export const CandidateInterviewFlow: React.FC = () => {
     resetSession();
     setSelectedFile(null);
     setAnswerText('');
+    setFinalTranscript('');
+    setInterimTranscript('');
     setCodeAnswer('');
     setLastFeedback(null);
+    setPendingNextQuestion(null);
     setPdfDownloaded(false);
-    setInterviewStep('idle');
+    setVoiceState('question_ready');
+    setIsRecordingConfirmed(false);
     currentQuestionIdRef.current = null;
     setStage('landing');
   };
@@ -877,25 +962,46 @@ export const CandidateInterviewFlow: React.FC = () => {
                 )}
 
                 <div className="flex flex-col sm:flex-row gap-3">
-                  <button
-                    id="finish-answer-btn"
-                    data-testid="submit-answer-btn"
-                    onClick={handleFinishAnswer}
-                    disabled={isSubmitting || !codeAnswer.trim()}
-                    className="flex-1 py-3.5 px-6 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 font-bold text-sm tracking-wide flex items-center justify-center gap-2 transition-all shadow-lg shadow-cyan-500/20"
-                  >
-                    {isSubmitting ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Evaluating Code Solution...
-                      </>
-                    ) : (
-                      <>
-                        <Send className="w-4 h-4" />
-                        Submit Code Solution
-                      </>
-                    )}
-                  </button>
+                  {voiceState === 'feedback_ready' ? (
+                    <button
+                      id="continue-next-question-btn"
+                      onClick={handleContinueNextQuestion}
+                      className="flex-1 py-3.5 px-6 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-sm tracking-wide flex items-center justify-center gap-2 transition-all shadow-lg shadow-cyan-500/20"
+                    >
+                      {lastFeedback?.isComplete ? (
+                        <>
+                          <Award className="w-4 h-4" />
+                          View Final Performance Report
+                          <ArrowRight className="w-4 h-4" />
+                        </>
+                      ) : (
+                        <>
+                          <span>Continue to Next Question</span>
+                          <ArrowRight className="w-4 h-4" />
+                        </>
+                      )}
+                    </button>
+                  ) : (
+                    <button
+                      id="finish-answer-btn"
+                      data-testid="submit-answer-btn"
+                      onClick={handleFinishAnswer}
+                      disabled={isSubmitting || !codeAnswer.trim() || voiceState === 'evaluating' || voiceState === 'transcribing'}
+                      className="flex-1 py-3.5 px-6 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 font-bold text-sm tracking-wide flex items-center justify-center gap-2 transition-all shadow-lg shadow-cyan-500/20"
+                    >
+                      {isSubmitting || voiceState === 'evaluating' || voiceState === 'transcribing' ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Evaluating Code Solution...
+                        </>
+                      ) : (
+                        <>
+                          <Send className="w-4 h-4" />
+                          Submit Code Solution
+                        </>
+                      )}
+                    </button>
+                  )}
                   <button
                     id="submit-answer-btn"
                     onClick={handleFinishAnswer}
@@ -920,7 +1026,7 @@ export const CandidateInterviewFlow: React.FC = () => {
                 {/* Voice Status & Recording Controls */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <Mic className={`w-4 h-4 ${isRecording ? 'text-rose-400 animate-pulse' : 'text-cyan-400'}`} />
+                    <Mic className={`w-4 h-4 ${isRecordingConfirmed && isRecording ? 'text-rose-400 animate-pulse' : 'text-cyan-400'}`} />
                     <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
                       Spoken Answer
                     </span>
@@ -938,15 +1044,15 @@ export const CandidateInterviewFlow: React.FC = () => {
                     <button
                       type="button"
                       onClick={handleToggleVoiceRecord}
-                      disabled={isSubmitting}
+                      disabled={isSubmitting || voiceState === 'evaluating' || voiceState === 'transcribing'}
                       className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors border ${
-                        isRecording
+                        isRecordingConfirmed && isRecording
                           ? 'bg-rose-500/20 border-rose-500 text-rose-300 animate-pulse'
                           : 'bg-slate-950 border-slate-800 text-slate-300 hover:text-white'
                       }`}
                     >
-                      {isRecording ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
-                      <span>{isRecording ? `Recording (${formatTime(micDuration)})` : 'Restart Voice'}</span>
+                      {isRecordingConfirmed && isRecording ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+                      <span>{isRecordingConfirmed && isRecording ? `Recording (${formatTime(micDuration)})` : 'Start Speaking'}</span>
                     </button>
                   </div>
                 </div>
@@ -955,39 +1061,78 @@ export const CandidateInterviewFlow: React.FC = () => {
                 <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800/80 space-y-3">
                   <div className="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800/60 pb-2">
                     <div className="flex items-center gap-2">
-                      {isRecording ? (
+                      {isRecordingConfirmed && isRecording ? (
                         <>
                           <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping inline-block" />
                           <span className="text-rose-300 font-semibold">Listening to candidate...</span>
                         </>
-                      ) : isSpeakingTTS ? (
+                      ) : voiceState === 'speaking_question' || isSpeakingTTS ? (
                         <>
                           <Volume2 className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
                           <span className="text-cyan-300">Reading question aloud...</span>
                         </>
-                      ) : interviewStep === 'evaluating' ? (
+                      ) : voiceState === 'transcribing' ? (
                         <>
                           <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
-                          <span className="text-cyan-300">Evaluating technical response...</span>
+                          <span className="text-cyan-300">Finalizing speech transcription...</span>
+                        </>
+                      ) : voiceState === 'evaluating' ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
+                          <span className="text-cyan-300">Evaluating technical response with rubric...</span>
+                        </>
+                      ) : voiceState === 'saving_result' ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
+                          <span className="text-cyan-300">Persisting evaluation to session...</span>
+                        </>
+                      ) : voiceState === 'feedback_ready' ? (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                          <span className="text-emerald-300 font-semibold">Answer recorded & evaluated</span>
                         </>
                       ) : (
-                        <span>Answer ready for submission</span>
+                        <span>Ready to speak. Microphone activates after question is read.</span>
                       )}
                     </div>
-                    {isRecording && <span className="font-mono text-rose-400">{formatTime(micDuration)}</span>}
+                    {isRecordingConfirmed && isRecording && <span className="font-mono text-rose-400">{formatTime(micDuration)}</span>}
                   </div>
 
-                  {/* Spoken Text Display */}
+                  {micError && (
+                    <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
+                        <span>{micError}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={startMicrophoneRecording}
+                        className="px-2.5 py-1 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30 text-xs hover:bg-amber-500/30 font-medium shrink-0"
+                      >
+                        Enable Microphone
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Spoken Text Display - strictly segmented without chunk duplication */}
                   <div id="live-transcript-display" className="text-sm text-slate-200 min-h-[72px] leading-relaxed">
-                    {answerText ? (
-                      <p className="font-sans whitespace-pre-wrap">{answerText}</p>
+                    {finalTranscript || interimTranscript || answerText ? (
+                      <p className="font-sans whitespace-pre-wrap">
+                        {finalTranscript}
+                        {interimTranscript && (
+                          <span className="text-slate-400 italic">
+                            {finalTranscript ? ` ${interimTranscript}` : interimTranscript}
+                          </span>
+                        )}
+                        {!finalTranscript && !interimTranscript && answerText}
+                      </p>
                     ) : (
                       <p className="text-slate-500 italic">
-                        {isSpeakingTTS
+                        {voiceState === 'speaking_question' || isSpeakingTTS
                           ? 'The interviewer is reading the question. Your microphone will activate automatically when finished...'
-                          : isRecording
+                          : isRecordingConfirmed && isRecording
                           ? 'Speak your response clearly into your microphone...'
-                          : 'Click "Finish Answer" when completed, or speak to record your answer.'}
+                          : 'Click "Start Speaking" or "Finish Answer" when ready.'}
                       </p>
                     )}
                   </div>
@@ -1000,8 +1145,11 @@ export const CandidateInterviewFlow: React.FC = () => {
                     <textarea
                       id="transcript-input"
                       value={answerText}
-                      onChange={(e) => setAnswerText(e.target.value)}
-                      disabled={isSubmitting}
+                      onChange={(e) => {
+                        setAnswerText(e.target.value);
+                        setFinalTranscript(e.target.value);
+                      }}
+                      disabled={isSubmitting || voiceState === 'evaluating' || voiceState === 'transcribing'}
                       rows={4}
                       placeholder="Type or correct your technical answer..."
                       className="w-full bg-slate-950/90 border border-slate-800 rounded-2xl p-4 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all font-mono leading-relaxed"
@@ -1012,7 +1160,10 @@ export const CandidateInterviewFlow: React.FC = () => {
                   <textarea
                     id="transcript-input"
                     value={answerText}
-                    onChange={(e) => setAnswerText(e.target.value)}
+                    onChange={(e) => {
+                      setAnswerText(e.target.value);
+                      setFinalTranscript(e.target.value);
+                    }}
                     className="hidden"
                     aria-hidden="true"
                   />
@@ -1025,32 +1176,57 @@ export const CandidateInterviewFlow: React.FC = () => {
                   </div>
                 )}
 
-                {/* Primary Voice Action: Finish Answer */}
+                {/* Primary Voice Action: Finish Answer / Continue to Next */}
                 <div className="flex flex-col sm:flex-row gap-3 pt-1">
-                  <button
-                    id="finish-answer-btn"
-                    onClick={handleFinishAnswer}
-                    disabled={isSubmitting}
-                    className="flex-1 py-3.5 px-6 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 font-bold text-sm tracking-wide flex items-center justify-center gap-2 transition-all shadow-lg shadow-cyan-500/20"
-                  >
-                    {isSubmitting ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Evaluating response & updating session...
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle2 className="w-4 h-4" />
-                        Finish Answer
-                      </>
-                    )}
-                  </button>
+                  {voiceState === 'feedback_ready' ? (
+                    <button
+                      id="continue-next-question-btn"
+                      onClick={handleContinueNextQuestion}
+                      className="flex-1 py-3.5 px-6 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-sm tracking-wide flex items-center justify-center gap-2 transition-all shadow-lg shadow-cyan-500/20"
+                    >
+                      {lastFeedback?.isComplete ? (
+                        <>
+                          <Award className="w-4 h-4" />
+                          View Final Performance Report
+                          <ArrowRight className="w-4 h-4" />
+                        </>
+                      ) : (
+                        <>
+                          <span>Continue to Next Question</span>
+                          <ArrowRight className="w-4 h-4" />
+                        </>
+                      )}
+                    </button>
+                  ) : (
+                    <button
+                      id="finish-answer-btn"
+                      onClick={handleFinishAnswer}
+                      disabled={isSubmitting || voiceState === 'evaluating' || voiceState === 'transcribing'}
+                      className="flex-1 py-3.5 px-6 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 font-bold text-sm tracking-wide flex items-center justify-center gap-2 transition-all shadow-lg shadow-cyan-500/20"
+                    >
+                      {isSubmitting || voiceState === 'evaluating' || voiceState === 'transcribing' ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          {voiceState === 'transcribing'
+                            ? 'Finalizing Transcript...'
+                            : voiceState === 'evaluating'
+                            ? 'Evaluating Technical Response...'
+                            : 'Processing Assessment...'}
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="w-4 h-4" />
+                          Finish Answer
+                        </>
+                      )}
+                    </button>
+                  )}
 
                   {/* Compatibility Submit button for test automation runners */}
                   <button
                     id="submit-answer-btn"
                     onClick={handleFinishAnswer}
-                    disabled={isSubmitting}
+                    disabled={isSubmitting || voiceState === 'evaluating' || voiceState === 'transcribing'}
                     data-testid="submit-answer-btn"
                     className="hidden"
                     aria-hidden="true"
@@ -1060,7 +1236,7 @@ export const CandidateInterviewFlow: React.FC = () => {
                   <button
                     id="submit-transcript-btn"
                     onClick={handleFinishAnswer}
-                    disabled={isSubmitting}
+                    disabled={isSubmitting || voiceState === 'evaluating' || voiceState === 'transcribing'}
                     className="hidden"
                     aria-hidden="true"
                   >

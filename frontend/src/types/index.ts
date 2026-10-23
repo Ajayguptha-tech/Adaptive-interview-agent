@@ -321,6 +321,7 @@ export interface BackendQuestion {
   code_snippet?: string;
   expected_answer_format: 'verbal' | 'code';
   requires_code?: boolean;
+  response_type?: 'verbal' | 'code_writing' | 'code_output' | 'debugging' | string;
   starter_code?: string;
   language?: string;
   topic?: string;
