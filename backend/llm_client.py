@@ -90,6 +90,7 @@ class LLMClient:
             ],
             "format": "json",
             "stream": False,
+            "keep_alive": "15m",
             "options": merged_options,
         }
 

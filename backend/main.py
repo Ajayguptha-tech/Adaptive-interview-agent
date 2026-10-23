@@ -228,8 +228,18 @@ async def upload_resume(
 
     req_skills_list = [s.strip() for s in required_skills.split(",") if s.strip()] if required_skills else None
     pref_skills_list = [s.strip() for s in preferred_skills.split(",") if s.strip()] if preferred_skills else None
+    from backend.role_validator import RoleValidator
 
-    effective_role = target_role or job_title or "Software Engineer"
+    raw_user_role = (target_role or job_title or "").strip()
+    if raw_user_role:
+        is_valid, norm_role, role_err = RoleValidator.validate_role(raw_user_role, is_required=True)
+        if not is_valid:
+            logger.warning("[ROLE_REJECT] Rejected invalid role input '%s': %s", raw_user_role, role_err)
+            raise HTTPException(status_code=422, detail=role_err)
+        effective_role = norm_role
+    else:
+        effective_role = None
+
     adapter = get_resume_adapter()
 
     # Offload parsing and AI analysis to thread to avoid blocking event loop
@@ -251,13 +261,15 @@ async def upload_resume(
             detail=result.get("error_message", "Failed to analyze resume."),
         )
 
+    final_role = effective_role or result.get("target_role") or "Software Engineer"
+
     # Safely initiate blueprint & Question 1 pre-warming in background after resume analysis
     try:
         from backend.session_manager import prewarm_first_question
         prewarm_first_question(
             resume_id=result.get("resume_id"),
             resume_profile=result,
-            target_role=effective_role,
+            target_role=final_role,
             track=result.get("routed_track") or "python",
             difficulty_mode="adaptive",
             tech_stack=result.get("recommended_tech_stack"),
@@ -278,8 +290,24 @@ async def upload_resume(
         "total_experience_years": exp_years,
         "routed_track": routed_track,
         "candidate_name": result.get("candidate_name") or "Technical Candidate",
-        "target_role": effective_role,
+        "target_role": final_role,
         "profile": result,
+    }
+
+
+@app.get("/api/role/validate")
+def validate_role_api(role: str = Query(..., min_length=1)):
+    """
+    Validates job role input. Returns is_valid, normalized role, and actionable error message.
+    Rejects meaningless, random, or arbitrary text (e.g. asdfghjkl, qwerty, hello, 123456).
+    """
+    from backend.role_validator import RoleValidator
+    is_valid, normalized, err = RoleValidator.validate_role(role, is_required=True)
+    return {
+        "is_valid": is_valid,
+        "role": normalized if is_valid else None,
+        "normalized_role": normalized if is_valid else None,
+        "error_message": err,
     }
 
 

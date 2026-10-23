@@ -5,7 +5,7 @@ Covers question banks, rubrics, evaluations, sessions, and reports.
 
 from enum import Enum
 from typing import Dict, List, Optional, Any
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, field_validator
 
 
 class DifficultyLevel(str, Enum):
@@ -177,6 +177,17 @@ class PrepareInterviewRequest(BaseModel):
     difficulty_mode: InterviewMode = InterviewMode.ADAPTIVE
     tech_stack: Optional[str] = None
 
+    @field_validator("target_role", mode="after")
+    @classmethod
+    def validate_target_role(cls, v: Optional[str]) -> Optional[str]:
+        if v and str(v).strip():
+            from backend.role_validator import RoleValidator
+            is_valid, norm, err = RoleValidator.validate_role(str(v), is_required=True)
+            if not is_valid:
+                raise ValueError(err or "Please enter a valid job role, such as Python Developer, Software Engineer, or Data Analyst.")
+            return norm
+        return v
+
     @model_validator(mode="before")
     @classmethod
     def normalize_aliases(cls, data: Any) -> Any:
@@ -210,6 +221,17 @@ class StartInterviewRequest(BaseModel):
     feedback_mode: FeedbackMode = FeedbackMode.IMMEDIATE
     dynamic_questions: bool = True
     resume_id: Optional[str] = None
+
+    @field_validator("role", mode="after")
+    @classmethod
+    def validate_role(cls, v: Optional[str]) -> str:
+        if v and str(v).strip():
+            from backend.role_validator import RoleValidator
+            is_valid, norm, err = RoleValidator.validate_role(str(v), is_required=True)
+            if not is_valid:
+                raise ValueError(err or "Please enter a valid job role, such as Python Developer, Software Engineer, or Data Analyst.")
+            return norm or v
+        return v or "Python Developer"
 
     @model_validator(mode="before")
     @classmethod

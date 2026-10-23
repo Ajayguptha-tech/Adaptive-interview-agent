@@ -46,7 +46,18 @@ export async function apiRequest<T>(
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`API Error [${response.status}]: ${errorText || response.statusText}`);
+    let message = errorText || response.statusText;
+    try {
+      const parsed = JSON.parse(errorText);
+      if (typeof parsed?.detail === 'string') {
+        message = parsed.detail;
+      } else if (Array.isArray(parsed?.detail) && parsed.detail[0]?.msg) {
+        message = parsed.detail[0].msg;
+      }
+    } catch {
+      // Keep raw message
+    }
+    throw new Error(message);
   }
 
   return response.json();
@@ -72,7 +83,18 @@ export async function apiUpload<T>(
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`API Error [${response.status}]: ${errorText || response.statusText}`);
+    let message = errorText || response.statusText;
+    try {
+      const parsed = JSON.parse(errorText);
+      if (typeof parsed?.detail === 'string') {
+        message = parsed.detail;
+      } else if (Array.isArray(parsed?.detail) && parsed.detail[0]?.msg) {
+        message = parsed.detail[0].msg;
+      }
+    } catch {
+      // Keep raw message
+    }
+    throw new Error(message);
   }
 
   return response.json();
