@@ -39,12 +39,14 @@ class FullStackInterviewer(BaseInterviewer):
         topics: Optional[List[str]] = None,
         use_dynamic: bool = True,
         tech_stack: Optional[str] = None,
+        **kwargs,
     ) -> Tuple[Question, str]:
         return FullStackAdaptiveEngine.select_first_question(
             mode=mode,
             topics=topics,
             use_dynamic=use_dynamic,
             tech_stack=tech_stack,
+            **kwargs,
         )
 
     def evaluate_answer(
@@ -68,6 +70,7 @@ class FullStackInterviewer(BaseInterviewer):
         session_asked_texts: Optional[List[str]] = None,
         use_dynamic: bool = True,
         tech_stack: Optional[str] = None,
+        **kwargs,
     ) -> Tuple[Optional[Question], str]:
         return FullStackAdaptiveEngine.select_next_question(
             tracker=tracker,
@@ -79,6 +82,7 @@ class FullStackInterviewer(BaseInterviewer):
             session_asked_texts=session_asked_texts,
             use_dynamic=use_dynamic,
             tech_stack=tech_stack,
+            **kwargs,
         )
 
     def get_topics_and_competencies(self) -> Dict[str, Any]:

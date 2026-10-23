@@ -1646,4 +1646,22 @@ document.addEventListener("DOMContentLoaded", () => {
   checkSystemHealth();
   updateUploadUI();
   showView("upload");
+
+  // Window focus / blur sensor listener for non-punitive audit trail
+  window.addEventListener("blur", () => {
+    if (state.sessionId && elements.interviewView && !elements.interviewView.classList.contains("hidden")) {
+      fetch(`${API_BASE}/api/interview/${state.sessionId}/integrity_event`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event_type: "window_blur",
+          severity: "info",
+          confidence: 85.0,
+          title: "Candidate Window Focus Transition",
+          description: "Candidate browser tab temporarily lost focus during active interview session."
+        })
+      }).catch(() => {});
+    }
+  });
 });
+

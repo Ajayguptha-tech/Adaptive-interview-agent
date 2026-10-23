@@ -11,6 +11,7 @@ Generates authentic Full-Stack technical interview questions with:
 
 import json
 import logging
+import random
 import re
 import threading
 import time
@@ -110,23 +111,18 @@ class FullStackQuestionGenerator:
         session_asked_texts: List[str],
         threshold: float = SIMILARITY_DUPLICATE_THRESHOLD,
     ) -> Tuple[bool, str]:
-        # 1. Check against current session
-        for prev in session_asked_texts:
-            sim = FingerprintEngine.calculate_similarity(candidate_text, prev)
-            if sim >= threshold or candidate_text.strip().lower() == prev.strip().lower():
-                return True, f"Too similar ({sim:.2f}) to session question: '{prev[:50]}...'"
-
-        # 2. Check against persistent cross-session cache
+        from backend.question_agent.diversity_engine import QuestionDiversityEngine
         with self._lock:
-            cached_records = list(self.recent_records)
+            cached_texts = [r.get("text", "") for r in self.recent_records if r.get("text")]
 
-        for rec in cached_records:
-            prev_text = rec.get("text", "")
-            if not prev_text:
-                continue
-            sim = FingerprintEngine.calculate_similarity(candidate_text, prev_text)
-            if sim >= threshold:
-                return True, f"Too similar ({sim:.2f}) to recent candidate question: '{prev_text[:50]}...'"
+        is_dup, reason, _ = QuestionDiversityEngine.check_duplicate(
+            candidate_text=candidate_text,
+            session_asked_texts=session_asked_texts,
+            prior_candidate_texts=cached_texts,
+            threshold=threshold,
+        )
+        if is_dup:
+            return True, reason
 
         return False, ""
 
@@ -225,19 +221,19 @@ class FullStackQuestionGenerator:
             # Exhausted bank: pick question with least session overlap
             matches = all_bank
 
-        # Pick candidate with least similarity to recent history
-        best_candidate = matches[0]
-        lowest_sim = 1.0
-
+        # Pick candidate with least similarity to recent history with random tie-breaking
+        scored = []
         for candidate in matches:
             max_sim = 0.0
             for prev in session_asked_texts:
                 sim = FingerprintEngine.calculate_similarity(candidate.text, prev)
                 if sim > max_sim:
                     max_sim = sim
-            if max_sim < lowest_sim:
-                lowest_sim = max_sim
-                best_candidate = candidate
+            scored.append((max_sim, candidate))
+
+        min_sim = min(s[0] for s in scored)
+        best_candidates = [c for sim, c in scored if sim <= min_sim + 0.05]
+        best_candidate = random.choice(best_candidates)
 
         reason = (
             f"Selected curated Full-Stack question '{best_candidate.id}' on '{best_candidate.topic}' "

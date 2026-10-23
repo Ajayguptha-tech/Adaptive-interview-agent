@@ -33,11 +33,14 @@ class PythonInterviewer(BaseInterviewer):
         topics: Optional[List[str]] = None,
         use_dynamic: bool = True,
         tech_stack: Optional[str] = None,
+        **kwargs,
     ) -> Tuple[Question, str]:
         return AdaptiveEngine.select_first_question(
             mode=mode,
             topics=topics,
             use_dynamic=use_dynamic,
+            tech_stack=tech_stack,
+            **kwargs,
         )
 
     def evaluate_answer(
@@ -61,6 +64,7 @@ class PythonInterviewer(BaseInterviewer):
         session_asked_texts: Optional[List[str]] = None,
         use_dynamic: bool = True,
         tech_stack: Optional[str] = None,
+        **kwargs,
     ) -> Tuple[Optional[Question], str]:
         return AdaptiveEngine.select_next_question(
             tracker=tracker,
@@ -71,6 +75,8 @@ class PythonInterviewer(BaseInterviewer):
             question_number=question_number,
             session_asked_texts=session_asked_texts,
             use_dynamic=use_dynamic,
+            tech_stack=tech_stack,
+            **kwargs,
         )
 
     def get_topics_and_competencies(self) -> Dict[str, Any]:

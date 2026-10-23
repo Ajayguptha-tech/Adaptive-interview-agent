@@ -10,7 +10,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Optional, Dict, Any
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form, Header, Query
 from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,9 +23,50 @@ from backend.models import (
     EndInterviewRequest,
     InterviewMode,
     FeedbackMode,
+    IntegrityEventCreateRequest,
+    IntegrityEventUpdateRequest,
+    CandidateDecisionUpdateRequest,
+    CandidateComparisonRequest,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def verify_session_access(
+    session: Any,
+    x_candidate_id: Optional[str] = None,
+    x_session_token: Optional[str] = None,
+    candidate_id: Optional[str] = None,
+    token: Optional[str] = None,
+) -> None:
+    """
+    Enforces multi-user security and data isolation.
+    Validates that client has ownership of the session if identity headers or tokens are supplied.
+    """
+    provided_cand = x_candidate_id or candidate_id
+    provided_token = x_session_token or token
+
+    if provided_cand and getattr(session, "candidate_id", None) and provided_cand != session.candidate_id:
+        logger.warning(
+            "[AUTH_DENIED] Candidate ID mismatch for session %s (claimed='%s', owner='%s')",
+            session.session_id, provided_cand, session.candidate_id
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: You do not have authorization to access this interview session.",
+        )
+
+    if provided_token and getattr(session, "session_token", None) and provided_token != session.session_token:
+        logger.warning(
+            "[AUTH_DENIED] Session token mismatch for session %s",
+            session.session_id
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Invalid session authorization token.",
+        )
+
+
 from backend.session_manager import SessionManager
 from backend.llm_client import default_llm_client
 from backend.speech_bridge import speech_bridge
@@ -66,6 +107,8 @@ app.add_middleware(
 # In-memory session manager
 session_manager = SessionManager()
 
+from fastapi.responses import HTMLResponse, FileResponse, Response, RedirectResponse
+
 # Static directory path
 STATIC_DIR = Path(__file__).parent / "static"
 if not STATIC_DIR.exists():
@@ -77,22 +120,24 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 @app.get("/")
 def home(request: Request):
     """
-    Serves the modern interview web application UI.
-    If JSON is explicitly requested, returns API service status.
+    FastAPI Backend API Root.
+    Redirects web browsers to the primary frontend at http://localhost:5173.
+    Returns service metadata for programmatic API clients.
     """
     accept = request.headers.get("accept", "")
-    if "text/html" in accept or "*/*" in accept:
-        index_file = STATIC_DIR / "index.html"
-        if index_file.exists():
-            return FileResponse(str(index_file))
+    if "text/html" in accept:
+        return RedirectResponse(url="http://localhost:5173", status_code=307)
 
     return {
         "message": "Adaptive Python Interviewer API is running",
+        "service": "Adaptive Interview Intelligence API",
+        "status": "running",
         "version": "3.1.0",
         "model": default_llm_client.model_name,
         "tracks": ["python", "fullstack"],
+        "frontend_url": "http://localhost:5173",
         "docs": "/docs",
-        "ui": "/",
+        "health": "/api/health",
     }
 
 
@@ -206,8 +251,34 @@ async def upload_resume(
             detail=result.get("error_message", "Failed to analyze resume."),
         )
 
+    # Safely initiate blueprint & Question 1 pre-warming in background after resume analysis
+    try:
+        from backend.session_manager import prewarm_first_question
+        prewarm_first_question(
+            resume_id=result.get("resume_id"),
+            resume_profile=result,
+            target_role=effective_role,
+            track=result.get("routed_track") or "python",
+            difficulty_mode="adaptive",
+            tech_stack=result.get("recommended_tech_stack"),
+            max_questions=5,
+        )
+    except Exception as exc:
+        logger.warning("[PREWARM_TRIGGER_FAILED] %s", exc)
+
+    skills_list = result.get("skills") or result.get("extracted_skills") or []
+    exp_years = result.get("total_experience_years") or result.get("experience_years") or 0.0
+    routed_track = result.get("routed_track") or "python"
+
     return {
         **result,
+        "skills": skills_list,
+        "extracted_skills": skills_list,
+        "experience_years": exp_years,
+        "total_experience_years": exp_years,
+        "routed_track": routed_track,
+        "candidate_name": result.get("candidate_name") or "Technical Candidate",
+        "target_role": effective_role,
         "profile": result,
     }
 
@@ -279,6 +350,20 @@ def generate_interview_plan_endpoint(data: GeneratePlanRequest):
         company=data.company,
     )
     profile["interview_plan"] = plan.model_dump()
+    try:
+        from backend.session_manager import prewarm_first_question
+        diff_str = data.difficulty_mode.value if hasattr(data.difficulty_mode, "value") else str(data.difficulty_mode)
+        prewarm_first_question(
+            resume_id=data.resume_id,
+            resume_profile=profile,
+            target_role=data.target_role or profile.get("target_role") or "Software Engineer",
+            track=target_track,
+            difficulty_mode=diff_str,
+            tech_stack=data.tech_stack or profile.get("recommended_tech_stack"),
+            max_questions=data.max_questions or 5,
+        )
+    except Exception as exc:
+        logger.warning("[PREWARM_TRIGGER_FAILED] %s", exc)
     return plan.model_dump()
 
 
@@ -296,6 +381,12 @@ async def prepare_interview_endpoint(data: PrepareInterviewRequest):
         raise HTTPException(
             status_code=404,
             detail=f"Resume profile '{data.resume_id}' not found. Please upload resume first."
+        )
+
+    if data.max_questions < 5 or data.max_questions > 10:
+        raise HTTPException(
+            status_code=422,
+            detail="Configured interview length must be strictly between 5 and 10 questions inclusive."
         )
 
     track = profile.get("routed_track") or "python"
@@ -318,6 +409,21 @@ async def prepare_interview_endpoint(data: PrepareInterviewRequest):
         target_role=target_role,
     )
     profile["interview_plan"] = plan.model_dump()
+
+    # Pre-warm Question 1 based on prepared configuration before interview begins
+    try:
+        from backend.session_manager import prewarm_first_question
+        prewarm_first_question(
+            resume_id=data.resume_id,
+            resume_profile=profile,
+            target_role=target_role,
+            track=track,
+            difficulty_mode=diff_mode,
+            tech_stack=tech_stack,
+            max_questions=data.max_questions,
+        )
+    except Exception as exc:
+        logger.warning("[PREWARM_TRIGGER_FAILED] %s", exc)
 
     return {
         "status": "ready",
@@ -380,6 +486,43 @@ def get_interview_skill_gap(session_id: str):
     }
 
 
+@app.get("/api/interview/{session_id}/blueprint")
+def get_interview_blueprint(session_id: str):
+    """Returns candidate's active interview blueprint if available."""
+    session = session_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Interview session not found.")
+    blueprint = getattr(session, "blueprint", None)
+    if not blueprint:
+        from backend.question_agent import default_question_agent
+        diff_str = session.difficulty_mode.value if hasattr(session.difficulty_mode, "value") else str(session.difficulty_mode)
+        blueprint = default_question_agent.create_blueprint(
+            resume_profile=session.resume_profile,
+            target_role=session.role,
+            interview_mode="mock" if session.dynamic_questions else "predefined",
+            difficulty_mode=diff_str,
+            target_track=session.track,
+            tech_stack=session.tech_stack,
+            max_questions=session.max_questions,
+            candidate_id=session.candidate_id,
+        )
+        session.blueprint = blueprint
+    return blueprint.model_dump()
+
+
+@app.get("/api/question_agent/stats")
+def get_question_agent_stats():
+    """Returns Question Catalog statistics and generation latency metrics."""
+    from backend.question_agent import default_question_agent
+    return {
+        "catalog_size": default_question_agent.catalog.get_total_count(),
+        "total_generations": default_question_agent.generator.total_generations,
+        "fallback_count": default_question_agent.generator.fallback_count,
+        "last_latency_ms": default_question_agent.generator.last_latency_ms,
+        "status": "active",
+    }
+
+
 @app.post("/api/interview/start")
 def start_interview(data: StartInterviewRequest):
     """
@@ -392,13 +535,30 @@ def start_interview(data: StartInterviewRequest):
 
         return {
             "session_id": session.session_id,
+            "candidate_id": session.candidate_id,
+            "session_token": session.session_token,
             "status": "active",
             "role": session.role,
             "track": session.track,
             "tech_stack": session.tech_stack,
             "question_number": 1,
+            "question_id": current_display.id,
             "question": current_display.text,
             "text": current_display.text,
+            "question_details": {
+                "question_id": current_display.id,
+                "id": current_display.id,
+                "question_number": 1,
+                "text": current_display.text,
+                "code_snippet": current_display.code_snippet,
+                "topic": current_display.topic,
+                "competency": current_display.competency,
+                "difficulty": current_display.difficulty.value,
+                "question_type": current_display.question_type.value,
+                "type": current_display.question_type.value,
+                "max_marks": current_display.max_marks,
+                "selection_reason": current_display.selection_reason,
+            },
             "code_snippet": current_display.code_snippet,
             "topic": current_display.topic,
             "competency": current_display.competency,
@@ -426,7 +586,12 @@ def start_interview(data: StartInterviewRequest):
 
 
 @app.post("/api/interview/{session_id}/answer")
-def submit_answer(session_id: str, data: AnswerRequest):
+def submit_answer(
+    session_id: str,
+    data: AnswerRequest,
+    x_candidate_id: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None),
+):
     """
     Submits candidate answer, performs rubric evaluation and isolated code test,
     updates competency tracking, and selects the next question.
@@ -438,6 +603,7 @@ def submit_answer(session_id: str, data: AnswerRequest):
             status_code=404,
             detail="Interview session not found. Please start a new interview.",
         )
+    verify_session_access(session, x_candidate_id=x_candidate_id, x_session_token=x_session_token)
 
     if session.status != "active":
         raise HTTPException(
@@ -455,6 +621,8 @@ def submit_answer(session_id: str, data: AnswerRequest):
         result = session_manager.submit_answer(
             session_id=session_id,
             answer=data.answer,
+            question_id=getattr(data, "question_id", None),
+            question_number=getattr(data, "question_number", None),
         )
 
         # For backwards compatibility with voice_interview.py:
@@ -513,6 +681,11 @@ def submit_answer(session_id: str, data: AnswerRequest):
             "questions_remaining": result["questions_remaining"],
             "feedback_mode": result["feedback_mode"],
             "evaluation": compat_evaluation,
+            "marks_awarded": eval_result.awarded_marks,
+            "max_marks": eval_result.max_marks,
+            "percentage": eval_result.percentage,
+            "feedback": eval_result.summary_explanation,
+            "misconceptions": eval_result.missing_concepts,
             "next_question": next_q_text,
             "next_competency": next_competency,
             "next_question_details": next_q_dict,
@@ -526,7 +699,12 @@ def submit_answer(session_id: str, data: AnswerRequest):
 
 
 @app.post("/api/interview/{session_id}/end")
-def end_interview_early(session_id: str, data: Optional[EndInterviewRequest] = None):
+def end_interview_early(
+    session_id: str,
+    data: Optional[EndInterviewRequest] = None,
+    x_candidate_id: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None),
+):
     """
     Allows ending an interview early or cancelling at any point,
     halting pending timers and generating the final report immediately.
@@ -534,6 +712,7 @@ def end_interview_early(session_id: str, data: Optional[EndInterviewRequest] = N
     session = session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found.")
+    verify_session_access(session, x_candidate_id=x_candidate_id, x_session_token=x_session_token)
 
     target_status = data.status if (data and data.status) else "ended_early"
     if target_status not in ("ended_early", "cancelled", "completed"):
@@ -541,7 +720,11 @@ def end_interview_early(session_id: str, data: Optional[EndInterviewRequest] = N
 
     with session.lock:
         session.status = target_status
+        session.is_cancelled = True
+        session.pregenerated_question = None
         session.current_question = None
+
+    session_manager.persistence.save_session(session)
 
     report_obj = session_manager.generate_report(session_id)
     return {
@@ -553,11 +736,16 @@ def end_interview_early(session_id: str, data: Optional[EndInterviewRequest] = N
 
 
 @app.get("/api/interview/{session_id}")
-def get_interview(session_id: str):
+def get_interview(
+    session_id: str,
+    x_candidate_id: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None),
+):
     """Returns current state and history of an interview session."""
     session = session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found.")
+    verify_session_access(session, x_candidate_id=x_candidate_id, x_session_token=x_session_token)
 
     curr_display = (
         session.get_current_question_display().model_dump()
@@ -572,6 +760,7 @@ def get_interview(session_id: str):
         "tech_stack": session.tech_stack,
         "status": session.status,
         "question_count": len(session.history),
+        "question_number": len(session.history) + 1,
         "max_questions": session.max_questions,
         "difficulty_mode": session.difficulty_mode.value,
         "feedback_mode": session.feedback_mode.value,
@@ -580,8 +769,31 @@ def get_interview(session_id: str):
     }
 
 
+@app.get("/api/interview/{session_id}/status")
+def get_interview_status(
+    session_id: str,
+    x_candidate_id: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None),
+):
+    """Returns question progress and status for an active interview."""
+    session = session_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Interview session not found.")
+    return {
+        "session_id": session.session_id,
+        "status": session.status,
+        "question_number": len(session.history) + 1,
+        "max_questions": session.max_questions,
+        "questions_answered": len(session.history),
+    }
+
+
 @app.get("/api/interview/{session_id}/report")
-def interview_report(session_id: str):
+def interview_report(
+    session_id: str,
+    x_candidate_id: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None),
+):
     """
     Returns the comprehensive interview performance report.
     Includes backward-compatible fields for voice_interview.py
@@ -590,6 +802,7 @@ def interview_report(session_id: str):
     session = session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found.")
+    verify_session_access(session, x_candidate_id=x_candidate_id, x_session_token=x_session_token)
 
     report_obj = session_manager.generate_report(session_id)
 
@@ -616,7 +829,13 @@ def interview_report(session_id: str):
 
 
 @app.get("/api/interview/{session_id}/pdf")
-def download_interview_pdf(session_id: str):
+def download_interview_pdf(
+    session_id: str,
+    x_candidate_id: Optional[str] = Header(None),
+    x_session_token: Optional[str] = Header(None),
+    candidate_id: Optional[str] = Query(None),
+    token: Optional[str] = Query(None),
+):
     """
     Generates and downloads the comprehensive technical assessment report
     as an enterprise-grade multi-page PDF document.
@@ -624,6 +843,13 @@ def download_interview_pdf(session_id: str):
     session = session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found.")
+    verify_session_access(
+        session,
+        x_candidate_id=x_candidate_id,
+        x_session_token=x_session_token,
+        candidate_id=candidate_id,
+        token=token,
+    )
 
     from backend.resume_analyzer.adapter import get_resume_adapter
     from backend.pdf_generator import InterviewPDFReportGenerator
@@ -804,31 +1030,179 @@ async def transcribe_uploaded_audio(session_id: str, file: UploadFile = File(...
             pass
 
 
-@app.get("/api/interview/{session_id}/pdf")
-async def download_interview_pdf_report(session_id: str):
+# =========================================================================
+# MODULE 3: INTERVIEW INTEGRITY TELEMETRY & AUDIT APIS
+# =========================================================================
+
+@app.post("/api/interview/{session_id}/integrity_event")
+async def record_integrity_event(
+    session_id: str,
+    event_data: IntegrityEventCreateRequest,
+    x_candidate_id: Optional[str] = Header(None),
+):
     """
-    Generates and returns an enterprise-grade multi-page downloadable PDF report
-    conforming strictly to Phase 11 requirements using server-side ReportLab.
+    Records an observed sensor or browser telemetry event (window blur, focus transition, audio fluctuation).
+    Entries are non-accusatory raw sensory logs meant for human recruiter context.
     """
     session = session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found.")
 
-    report = session_manager.get_final_report(session_id)
-    if not report:
-        raise HTTPException(status_code=400, detail="Report could not be generated for this session.")
+    record = session_manager.log_integrity_event(
+        session_id=session_id,
+        event_data=event_data,
+        candidate_id=x_candidate_id or getattr(session, "candidate_id", None),
+    )
+    return {
+        "status": "success",
+        "event": record.model_dump(),
+    }
 
+
+@app.get("/api/interview/{session_id}/integrity_events")
+async def list_integrity_events(session_id: str):
+    """
+    Retrieves chronological sensor and browser telemetry stream for an interview session.
+    """
+    session = session_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    events = session_manager.get_integrity_events(session_id)
+    return {
+        "session_id": session_id,
+        "count": len(events),
+        "events": [e.model_dump() for e in events],
+    }
+
+
+@app.patch("/api/interview/{session_id}/integrity_event/{event_id}")
+async def update_integrity_event_triage(
+    session_id: str,
+    event_id: str,
+    update_data: IntegrityEventUpdateRequest,
+):
+    """
+    Allows recruiter to annotate or resolve an integrity observation
+    (e.g., 'verified_benign', 'verified_technical', 'requires_followup').
+    """
+    success = session_manager.update_integrity_event_status(
+        event_id=event_id,
+        status=update_data.status,
+        notes=update_data.notes,
+    )
+    if not success:
+        raise HTTPException(status_code=404, detail="Integrity event not found or update failed.")
+
+    return {
+        "status": "updated",
+        "event_id": event_id,
+        "recruiter_status": update_data.status,
+    }
+
+
+@app.get("/api/interview/{session_id}/integrity_summary")
+async def get_integrity_summary(session_id: str):
+    """
+    Aggregates session sensor events into a recruiter-visible integrity summary with ethical protocols.
+    """
+    summary = session_manager.get_integrity_summary(session_id)
+    return summary.model_dump()
+
+
+# =========================================================================
+# MODULE 5: CANDIDATE DECISION INTELLIGENCE & RECRUITER APIS
+# =========================================================================
+
+@app.get("/api/recruiter/candidates")
+async def list_recruiter_candidates(role: Optional[str] = Query(None)):
+    """
+    Returns candidate decision records for recruiter pipeline dashboard.
+    If database records exist, returns them; also includes active sessions.
+    """
+    records = session_manager.list_candidate_decisions(target_role=role)
+    # Also discover active sessions not yet finalized
+    active_ids = session_manager.persistence.list_sessions()
+    existing_sids = {r.session_id for r in records}
+
+    candidates = [r.model_dump() for r in records]
+    for sid in active_ids[:20]:
+        if sid not in existing_sids:
+            try:
+                dec = session_manager.get_candidate_decision(sid)
+                if dec:
+                    candidates.append(dec.model_dump())
+            except Exception:
+                pass
+
+    return {
+        "count": len(candidates),
+        "candidates": candidates,
+    }
+
+
+@app.get("/api/recruiter/candidate/{session_id}")
+async def get_recruiter_candidate_details(session_id: str):
+    """
+    Retrieves full candidate evaluation, decision recommendation, and rubric breakdown.
+    """
+    decision = session_manager.get_candidate_decision(session_id)
+    if not decision:
+        raise HTTPException(status_code=404, detail="Candidate assessment record not found.")
+
+    report = None
     try:
-        from backend.pdf_generator import InterviewPDFReportGenerator
-        pdf_bytes = await asyncio.to_thread(InterviewPDFReportGenerator.build_pdf_bytes, report)
-        filename = f"Technical_Assessment_Report_{session_id[:8]}.pdf"
-        return Response(
-            content=pdf_bytes,
-            media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-        )
-    except Exception as exc:
-        logger.error(f"PDF generation failed for session {session_id}: {exc}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to generate PDF report: {exc}")
+        report = session_manager.generate_report(session_id).model_dump()
+    except Exception:
+        pass
+
+    return {
+        "decision": decision.model_dump(),
+        "report": report,
+    }
+
+
+@app.patch("/api/recruiter/decision/{session_id}")
+async def update_recruiter_decision(
+    session_id: str,
+    update: CandidateDecisionUpdateRequest,
+):
+    """
+    Allows human recruiter to record an outcome override (e.g., 'proceed_to_human_review', 'request_follow_up')
+    along with contextual hiring panel notes.
+    """
+    success = session_manager.update_candidate_decision(
+        session_id=session_id,
+        outcome=update.outcome,
+        notes=update.notes,
+    )
+    if not success:
+        raise HTTPException(status_code=404, detail="Candidate decision record not found.")
+
+    return {
+        "status": "updated",
+        "session_id": session_id,
+        "outcome": update.outcome,
+        "notes": update.notes,
+    }
+
+
+@app.post("/api/recruiter/compare")
+async def compare_candidates(request: CandidateComparisonRequest):
+    """
+    Provides explainable side-by-side comparison across multiple candidate assessments
+    under the same role family, normalizing scores and mapping competency matrices.
+    """
+    if not request.session_ids:
+        raise HTTPException(status_code=400, detail="session_ids list must not be empty.")
+
+    result = session_manager.compare_candidates(request.session_ids)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+
+    return result
+
+
+
 
 

@@ -261,6 +261,29 @@ class InterviewPDFReportGenerator:
                 Paragraph(f"{elig_data.get('headline', 'Standard role alignment')}", body_style),
             ])
 
+        # Recruiter Decision Recommendation & Session Integrity Telemetry
+        dec_rec = report_data.get("decision_recommendation")
+        integ_summary = report_data.get("integrity_summary")
+
+        if dec_rec:
+            summary_table_data.append([
+                Paragraph("<b>Recruiter Recommendation:</b>", body_style),
+                Paragraph(f"<b>{dec_rec.get('outcome', '').replace('_', ' ').title()}</b>", body_style),
+                Paragraph("<b>Assessment Grade:</b>", body_style),
+                Paragraph(f"<b>{dec_rec.get('grade', 'Competent')}</b> (Confidence: {dec_rec.get('confidence_score', 90):.0f}%)", body_style),
+            ])
+
+        if integ_summary:
+            total_ev = integ_summary.get("total_events", 0)
+            pending_rev = integ_summary.get("pending_review_count", 0)
+            has_followup = integ_summary.get("requires_followup_count", 0) > 0
+            summary_table_data.append([
+                Paragraph("<b>Session Telemetry:</b>", body_style),
+                Paragraph(f"{total_ev} sensor/browser events ({pending_rev} pending review)", body_style),
+                Paragraph("<b>Telemetry Audit:</b>", body_style),
+                Paragraph(f"{'Follow-up Recommended' if has_followup else 'Verified Benign'}", body_style),
+            ])
+
         sum_table = Table(summary_table_data, colWidths=[1.7 * inch, 2.3 * inch, 1.6 * inch, 1.9 * inch])
         sum_table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), c_light_bg),

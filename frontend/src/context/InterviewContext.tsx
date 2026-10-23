@@ -158,6 +158,9 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         setIsBackendConnected(true);
         setIsDemoMode(false);
         addAgentLog('planner', 'FastAPI Connected', `LLM: ${health.models?.[0] || 'qwen2.5:7b'}, Speech & Rubrics Ready.`);
+        InterviewService.getCandidates().then(cands => {
+          if (cands && cands.length > 0) setCandidates(cands);
+        }).catch(() => {});
       } else {
         setIsBackendConnected(false);
         setIsDemoMode(true);
@@ -196,11 +199,22 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const ev = InterviewIntegrityAgent.createFocusLossEvent(activeInterview.id, Math.max(0, elapsed));
       setIntegrityEvents(prev => [ev, ...prev]);
       addAgentLog('integrity', 'Window Focus Shift', 'Candidate tab temporarily transitioned focus away from interview window.', 'warning');
+
+      if (backendSessionId) {
+        InterviewService.logIntegrityEvent(backendSessionId, {
+          event_type: 'window_blur',
+          severity: 'info',
+          confidence: 85,
+          title: 'Candidate Window Focus Transition',
+          description: 'Candidate browser tab temporarily lost focus during active interview session.',
+          timestamp_offset_seconds: Math.max(0, elapsed),
+        });
+      }
     };
 
     window.addEventListener('blur', handleBlur);
     return () => window.removeEventListener('blur', handleBlur);
-  }, [isInterviewActive, isPaused, activeInterview, sessionDurationMinutes, timeRemainingSeconds, addAgentLog]);
+  }, [isInterviewActive, isPaused, activeInterview, sessionDurationMinutes, timeRemainingSeconds, backendSessionId, addAgentLog]);
 
   /**
    * BACKEND ACTION 1: Upload real resume file and receive eligibility & integrity audit
@@ -213,12 +227,17 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setBackendEligibility(resp.role_eligibility || null);
       setBackendIntegrity(resp.integrity_report || null);
 
+      const skillsList: string[] = resp.extracted_skills || (resp as any).skills || [];
+      const expYears: number = resp.experience_years ?? (resp as any).total_experience_years ?? 0;
+      const routedTrack: string = resp.routed_track || 'python';
+      const candName: string = resp.candidate_name || 'Technical Candidate';
+
       // Create candidate entity
       const newCand: Candidate = {
         id: resp.resume_id,
-        name: resp.candidate_name,
-        role: resp.target_role,
-        experienceYears: resp.experience_years,
+        name: candName,
+        role: resp.target_role || targetRole,
+        experienceYears: expYears,
         status: 'scheduled',
         createdAt: new Date().toISOString(),
         resume: {
@@ -226,23 +245,23 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           candidateId: resp.resume_id,
           fileName: file.name,
           uploadedAt: new Date().toISOString(),
-          extractedSkills: resp.extracted_skills,
-          experienceYears: resp.experience_years,
+          extractedSkills: skillsList,
+          experienceYears: expYears,
         },
       };
 
       const newRole: JobRole = {
         id: `role-${Date.now()}`,
-        title: resp.target_role,
+        title: resp.target_role || targetRole,
         department: 'Engineering',
         level: 'Engineering Candidate',
-        description: `Target role: ${resp.target_role} (${resp.routed_track.toUpperCase()} Track)`,
-        requiredCompetencies: resp.extracted_skills,
+        description: `Target role: ${resp.target_role || targetRole} (${routedTrack.toUpperCase()} Track)`,
+        requiredCompetencies: skillsList,
         niceToHaveCompetencies: [],
       };
 
       // Set competencies from extracted skills
-      const comps: Competency[] = resp.extracted_skills.map((skill, idx) => ({
+      const comps: Competency[] = skillsList.map((skill, idx) => ({
         id: `comp-${idx}`,
         name: skill,
         category: 'technical',
@@ -254,7 +273,7 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setActiveRole(newRole);
       setCompetencies(comps);
       setCandidates(prev => [newCand, ...prev.filter(c => c.id !== newCand.id)]);
-      addAgentLog('planner', 'Resume Analysis Done', `Candidate: ${resp.candidate_name}, Track: ${resp.routed_track}, ATS: ${resp.ats_score}%`);
+      addAgentLog('planner', 'Resume Analysis Done', `Candidate: ${candName}, Track: ${routedTrack}, Skills: ${skillsList.length}`);
 
       return resp;
     } catch (err: any) {
@@ -281,30 +300,28 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       difficulty: options.difficulty || 'adaptive'
     });
 
-    setBackendSessionId(prep.session_id);
-    addAgentLog('interviewer', 'Starting Session', `Session ID: ${prep.session_id.substring(0, 8)}... (${prep.track} track)`);
-
     const startRes = await InterviewService.startInterview({
       resume_id: backendResumeData.resume_id,
-      session_id: prep.session_id,
       mode: options.mode,
       difficulty: options.difficulty || 'adaptive',
       target_questions: options.count,
       role: backendResumeData.target_role
     });
 
+    setBackendSessionId(startRes.session_id);
+    addAgentLog('interviewer', 'Starting Session', `Session ID: ${startRes.session_id.substring(0, 8)}... (${prep.track || 'technical'} track)`);
     setBackendQuestion(startRes.question);
 
     // Map to InterviewQuestion format for UI
     const mappedQ: InterviewQuestion = {
       id: startRes.question.question_id,
-      order: startRes.question.question_number,
+      order: startRes.question.question_number || 1,
       text: startRes.question.text,
       category: 'technical',
       targetCompetencies: [startRes.question.topic || 'Core Engineering'],
       difficulty: (startRes.question.difficulty as any) || 'intermediate',
       whyThisQuestion: {
-        contextAnalysis: `Question #${startRes.question.question_number} (${startRes.question.type})`,
+        contextAnalysis: `Question #${startRes.question.question_number || 1} (${startRes.question.type})`,
       }
     };
 
@@ -312,7 +329,7 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setQuestionHistory([mappedQ]);
 
     const newInterview: Interview = {
-      id: prep.session_id,
+      id: startRes.session_id,
       candidateId: backendResumeData.resume_id,
       jobRoleId: backendResumeData.target_role,
       status: 'in_progress',
@@ -458,7 +475,11 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return plan;
   };
 
-  const startInterview = (customPlan?: InterviewPlan) => {
+  const startInterview = async (customPlan?: InterviewPlan) => {
+    if (backendResumeData) {
+      await startBackendSession({ mode: 'mock', count: 5 });
+      return;
+    }
     setIsInterviewActive(true);
     setActiveTab('live');
   };
@@ -476,11 +497,7 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       await submitAnswerToBackend(transcriptText);
       return;
     }
-    // Local demo evaluation fallback
-    setIsEvaluating(true);
-    setTimeout(() => {
-      setIsEvaluating(false);
-    }, 1500);
+    throw new Error('No active backend interview session. Please upload a resume and start interview.');
   };
 
   const endInterview = async () => {
@@ -497,16 +514,31 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   const updateIntegrityEventStatus = (id: string, status: IntegrityStatus, notes?: string) => {
-    setIntegrityEvents(prev => prev.map(ev => ev.id === id ? { ...ev, recruiterStatus: status } : ev));
+    setIntegrityEvents(prev => prev.map(ev => ev.id === id ? { ...ev, recruiterStatus: status, recruiterNotes: notes } : ev));
+    if (backendSessionId) {
+      InterviewService.updateIntegrityEvent(backendSessionId, id, status, notes);
+    }
   };
 
   const updateReportOutcome = (outcome: RecommendationOutcome) => {
     if (candidateReport) {
       setCandidateReport({ ...candidateReport, outcome });
     }
+    if (backendSessionId) {
+      InterviewService.updateReportOutcome(backendSessionId, outcome);
+    }
   };
 
-  const refreshData = async () => {};
+  const refreshData = async () => {
+    try {
+      const cands = await InterviewService.getCandidates();
+      if (cands && cands.length > 0) {
+        setCandidates(cands);
+      }
+    } catch (err) {
+      console.warn('Failed to refresh recruiter pipeline candidates:', err);
+    }
+  };
 
   const resetSession = () => {
     setIsInterviewActive(false);

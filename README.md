@@ -29,14 +29,15 @@ In strict alignment with **Responsible AI and Human-in-the-Loop** principles, th
 ```
                               ┌──────────────────────────────────────────────┐
                               │            Web Presentation Tier             │
-                              ├──────────────────────┬───────────────────────┤
-                              │ Built-in FastWeb UI  │ Standalone React SPA  │
-                              │ (HTML/CSS/Three.js)  │ (React 19/TS/Tailwind)│
-                              └──────────┬───────────┴───────────┬───────────┘
-                                         │                       │
-                                         ▼                       ▼
+                              │       Unified React 19 / TS SPA (:5173)      │
+                              │       http://localhost:5173                  │
+                              └──────────────────────┬───────────────────────┘
+                                                     │
+                                                     │ (REST API & Web Proxy)
+                                                     ▼
 ┌────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │                                       FastAPI Backend Core (:8000)                                     │
+│                     (Browser requests to :8000 redirect automatically to :5173)                       │
 ├─────────────────────────┬──────────────────────────┬─────────────────────────┬─────────────────────────┤
 │    Session Manager      │  Domain Router & Tracks  │  Speech Bridge Service  │  ReportLab PDF Engine   │
 │  - Session Lifecycle    │  - Python Interviewer    │  - SpeechRecognition    │  - Multi-Page Canvas    │
@@ -64,9 +65,10 @@ In strict alignment with **Responsible AI and Human-in-the-Loop** principles, th
 - **Audio Pipeline**: Server-side Speech Bridge (`SpeechRecognition`, `pyttsx3`) and browser-side Web Speech API support.
 - **Reporting**: ReportLab 5.0 with custom two-pass `NumberedCanvas` for running headers, footers, and page tallies.
 
-### Frontend Options
-1. **Built-in Web Application (`backend/static/`)**: Served directly by FastAPI at `/`. Includes Three.js 3D orbital scene, harmonic sine wave canvas, audio visualizers, and resume upload flow.
-2. **Standalone React Application (`frontend/`)**: React 19, TypeScript, Vite, Tailwind CSS, Framer Motion, and Vitest test suite. Supports dual modes: Direct FastAPI integration or client-side Agent demo mode.
+### Primary Unified Frontend
+- **Single Source of Truth**: Modern React 19 application (`frontend/`) built with Vite, TypeScript, and Tailwind CSS.
+- **Accessible URL**: `http://localhost:5173/` (the FastAPI server at `http://127.0.0.1:8000/` automatically redirects browser traffic to `http://localhost:5173/`).
+- **Features**: Streamlined candidate-first UI, automated resume parsing & ATS gap detection, speech-to-text / text-to-speech interaction, dynamic rubrics, and certified ReportLab PDF downloads.
 
 ---
 
@@ -130,25 +132,36 @@ ollama run qwen2.5:7b
 
 ## 🖥️ Running the Application
 
-### Start the FastAPI Server
+### 1. Start Ollama Inference Engine (Terminal 1)
 ```bash
-uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
+ollama serve
 ```
 
-Once running:
-- **Interactive Web UI**: [http://127.0.0.1:8000/](http://127.0.0.1:8000/)
-- **Interactive Swagger API Docs**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-- **ReDoc API Documentation**: [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
-- **API Health Check**: [http://127.0.0.1:8000/api/health](http://127.0.0.1:8000/api/health)
+### 2. Start the FastAPI Backend (Terminal 2)
+```bash
+# Windows
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 
-### (Optional) Start the Standalone React Frontend
-If you wish to use the standalone React application:
+# Linux / macOS
+source .venv/bin/activate
+uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+Backend services available:
+- **Interactive Swagger API Docs**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+- **ReDoc Documentation**: [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
+- **API Health Check**: [http://127.0.0.1:8000/api/health](http://127.0.0.1:8000/api/health)
+- *Note*: Any browser request to `http://127.0.0.1:8000/` automatically redirects to the primary frontend at `http://localhost:5173/`.
+
+### 3. Start the Primary Frontend (Terminal 3)
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-Open [http://localhost:5173/](http://localhost:5173/) in your browser. Configure `VITE_API_BASE_URL=http://127.0.0.1:8000` in `frontend/.env` to link to the backend.
+
+### 4. Access the Application
+Open your browser at:
+**[http://localhost:5173/](http://localhost:5173/)**
 
 ---
 

@@ -22,6 +22,7 @@ class BaseInterviewer(ABC):
         topics: Optional[List[str]] = None,
         use_dynamic: bool = True,
         tech_stack: Optional[str] = None,
+        **kwargs,
     ) -> Tuple[Question, str]:
         """Selects or generates the opening question with transparency rationale."""
         pass
@@ -47,6 +48,7 @@ class BaseInterviewer(ABC):
         session_asked_texts: Optional[List[str]] = None,
         use_dynamic: bool = True,
         tech_stack: Optional[str] = None,
+        **kwargs,
     ) -> Tuple[Optional[Question], str]:
         """Selects or generates the next question adaptively based on demonstrated understanding."""
         pass

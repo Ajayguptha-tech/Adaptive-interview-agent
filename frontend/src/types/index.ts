@@ -315,11 +315,14 @@ export interface BackendQuestion {
   question_id: string;
   question_number: number;
   text: string;
-  type: 'conceptual' | 'code_writing' | 'code_output' | 'practical';
+  type: 'conceptual' | 'code_writing' | 'code_output' | 'practical' | string;
   difficulty: string;
   max_marks: number;
   code_snippet?: string;
   expected_answer_format: 'verbal' | 'code';
+  requires_code?: boolean;
+  starter_code?: string;
+  language?: string;
   topic?: string;
 }
 

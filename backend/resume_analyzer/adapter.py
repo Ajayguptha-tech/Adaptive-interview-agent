@@ -42,6 +42,7 @@ class ResumeAnalyzerAdapter:
 
         # In-memory store for analyzed resumes during active sessions
         self._store: Dict[str, Dict[str, Any]] = {}
+        self._hash_cache: Dict[str, Dict[str, Any]] = {}
 
     def validate_file(self, filename: str, file_bytes: bytes) -> Tuple[bool, Optional[str]]:
         """Validates file extension and size constraints."""
@@ -111,6 +112,16 @@ class ResumeAnalyzerAdapter:
                 "error_message": err,
                 "resume_id": None,
             }
+
+        file_hash = hashlib.sha256(file_bytes).hexdigest()
+        cache_key = f"{file_hash}_{target_role or job_title or 'default'}"
+        if cache_key in self._hash_cache:
+            cached_data = dict(self._hash_cache[cache_key])
+            fresh_id = str(uuid.uuid4())
+            cached_data["resume_id"] = fresh_id
+            self._store[fresh_id] = cached_data
+            logger.info("[PERF] Returning cached resume profile for key %s (duration <0.001s)", cache_key)
+            return cached_data
 
         # 2. Text Extraction
         try:
@@ -342,6 +353,7 @@ class ResumeAnalyzerAdapter:
 
         # Store in cache
         self._store[resume_id] = normalized_profile
+        self._hash_cache[cache_key] = dict(normalized_profile)
         return normalized_profile
 
     def get_resume_profile(self, resume_id: str) -> Optional[Dict[str, Any]]:

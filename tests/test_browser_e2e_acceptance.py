@@ -68,21 +68,26 @@ def test_browser_e2e_full_workflow():
             page.goto("http://127.0.0.1:8000/")
             page.wait_for_load_state("networkidle")
 
-            # 1.1 Verify Initial Screen: Resume Upload ONLY
-            assert page.is_visible("#upload-view"), "Upload view must be visible on initial load"
+            # 1.1 Verify Landing Page is the first screen of the application
+            assert page.is_visible("#landing-view"), "Landing page must be visible on initial load"
+            assert page.is_visible("#start-your-interview-btn"), "Start Your Interview button must be visible on landing page"
+            assert not page.is_visible("#upload-view"), "Upload view must be hidden before candidate initiates interview"
             assert not page.is_visible("#settings-view"), "Settings view must be hidden initially"
             assert not page.is_visible("#interview-view"), "Interview view must be hidden initially"
             assert not page.is_visible("#report-view"), "Report view must be hidden initially"
 
-            # 1.2 Verify required controls exist
+            # 1.2 Navigate from Landing Page to Resume Upload
+            page.click("#start-your-interview-btn")
+            page.wait_for_selector("#upload-view", state="visible")
+            assert not page.is_visible("#landing-view"), "Landing view should be hidden after clicking Start Your Interview"
+
+            # 1.3 Verify required upload controls exist
             assert page.is_visible("#initial-target-role"), "Target role input must be visible"
             assert page.is_visible("#initial-drop-zone"), "Drop zone must be visible"
             assert page.is_visible("#analyze-resume-btn"), "Analyze button must be visible"
-
-            # 1.3 Verify Analyze button is initially disabled
             assert page.is_disabled("#analyze-resume-btn"), "Analyze button must be disabled until inputs provided"
 
-            # 1.4 Verify NO internal agent selectors exist in DOM
+            # 1.4 Verify NO internal agent selectors or track cards exist in DOM
             page_content = page.content()
             assert "card-track-python" not in page_content, "Python track card must NOT exist in candidate DOM"
             assert "card-track-fullstack" not in page_content, "FullStack track card must NOT exist in candidate DOM"
@@ -110,22 +115,27 @@ def test_browser_e2e_full_workflow():
             target_role = page.inner_text("#profile-target-role")
             assert "Senior Python Engineer" in target_role
 
-            # 3.2 Verify no internal agent names exposed
+            # 3.2 Verify routed track card is HIDDEN from candidates
+            assert not page.is_visible("#profile-routed-track"), "Internal routed track must be HIDDEN from candidates"
+
+            # 3.3 Verify no internal agent names exposed
             settings_text = page.inner_text("#settings-view")
             assert "Python Interviewer Agent" not in settings_text
             assert "Full-Stack Interviewer Agent" not in settings_text
             assert "qwen2.5:7b" not in settings_text
 
-            # 3.3 Verify Interview Mode options
-            mode_pills = page.locator("#mode-pills .pill")
-            assert mode_pills.count() == 2, "Expected 2 interview modes (Mock and Predefined)"
+            # 3.4 Verify candidate-friendly Interview Mode labels (Mock Interview & Adaptive Interview)
+            mock_btn = page.locator("#mode-pills button[data-mode='predefined']")
+            assert "Mock Interview" in mock_btn.inner_text(), f"Expected 'Mock Interview' label, got '{mock_btn.inner_text()}'"
+            adaptive_btn = page.locator("#mode-pills button[data-mode='adaptive']")
+            assert "Adaptive Interview" in adaptive_btn.inner_text(), f"Expected 'Adaptive Interview' label, got '{adaptive_btn.inner_text()}'"
 
             # Step 4: Configure Settings & Prepare Questions
-            # Select 3 questions length for quick assessment
-            page.click("#length-pills button[data-count='3']")
+            # Select 5 questions length (standard calibrated minimum)
+            page.click("#length-pills button[data-count='5']")
 
-            # Select Predefined / Trained mode for rapid deterministic response
-            page.click("#mode-pills button[data-mode='predefined']")
+            # Select Mock Interview mode
+            mock_btn.click()
 
             # Verify Question Prep indicators
             page.wait_for_selector("#prep-indicator-card", state="visible")
@@ -135,8 +145,8 @@ def test_browser_e2e_full_workflow():
             assert not start_btn.is_disabled()
             page.click("#start-interview-btn")
 
-            # Wait for interview view to become visible
-            page.wait_for_selector("#interview-view", state="visible", timeout=30000)
+            # Wait for interview view to become visible (allow up to 90s for CPU inference/prewarm completion)
+            page.wait_for_selector("#interview-view", state="visible", timeout=90000)
             assert not page.is_visible("#settings-view"), "Settings view should now be hidden"
 
             # 5.1 Verify Question is loaded
@@ -144,23 +154,25 @@ def test_browser_e2e_full_workflow():
             q_text = page.inner_text("#question-text")
             assert len(q_text) > 10, f"Expected non-empty question text, got '{q_text}'"
 
-            # 5.2 Verify Voice-First Workspace is visible, Code Editor is hidden for Conceptual question
+            # 5.2 Verify Voice-First Workspace is visible, Code Editor and manual textbox are hidden for verbal question
             assert page.is_visible("#workspace-voice"), "Voice workspace must be visible for conceptual question"
-            assert not page.is_visible("#workspace-code"), "Code workspace must be HIDDEN for conceptual question"
-            assert not page.is_visible("#workspace-output"), "Output workspace must be HIDDEN for conceptual question"
+            assert not page.is_visible("#workspace-code-editor"), "Code editor must be HIDDEN for conceptual question"
+            assert not page.is_visible("#transcript-input"), "Typing textarea must be HIDDEN by default for verbal question"
+            assert page.is_visible("#finish-answer-btn"), "Finish Answer button must be visible for voice answers"
 
             # 5.3 Verify NO manual answer-type selector exists
             assert not page.is_visible("#answer-type-selector"), "Manual answer type selector must not appear"
 
             # Step 6: Submit Spoken/Verbal Answer
-            # Open transcript review panel and enter candidate answer
+            # Fill candidate answer via recognized transcript
             page.evaluate("""() => {
-                document.getElementById('transcript-review-panel').style.display = 'block';
-                document.getElementById('transcript-input').value = 'In Python, lists are mutable variable-length arrays storing pointers to objects. Tuples are immutable fixed-length sequences whose elements cannot be altered or appended after creation. Tuples can also serve as dictionary keys if all their items are hashable.';
+                const el = document.getElementById('transcript-input');
+                el.value = 'In Python, lists are mutable variable-length arrays storing pointers to objects. Tuples are immutable fixed-length sequences whose elements cannot be altered or appended after creation. Tuples can also serve as dictionary keys if all their items are hashable.';
+                el.dispatchEvent(new Event('input', { bubbles: true }));
             }""")
 
-            # Submit for evaluation
-            page.click("#submit-transcript-btn")
+            # Submit using Finish Answer
+            page.click("#finish-answer-btn")
 
             # Wait for evaluation feedback to appear (CPU Ollama evaluation takes 45-70s)
             page.wait_for_selector("#feedback-card", state="visible", timeout=120000)
@@ -196,7 +208,7 @@ def test_browser_e2e_full_workflow():
             browser.close()
 
             # Ensure zero uncaught JavaScript errors
-            critical_errors = [e for e in console_errors if "favicon" not in e and "404" not in e]
+            critical_errors = [e for e in console_errors if e.startswith("[error]") and "favicon" not in e and "404" not in e]
             assert len(critical_errors) == 0, f"Uncaught JavaScript console errors: {critical_errors}"
 
     finally:

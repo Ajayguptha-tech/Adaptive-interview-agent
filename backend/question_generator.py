@@ -179,23 +179,18 @@ class QuestionGenerator:
         1. Any question asked in the current session.
         2. Any question in the persistent cross-session cache.
         """
-        # 1. Check against current session
-        for prev in session_asked_texts:
-            sim = FingerprintEngine.calculate_similarity(candidate_text, prev)
-            if sim >= threshold or candidate_text.strip().lower() == prev.strip().lower():
-                return True, f"Too similar ({sim:.2f}) to session question: '{prev[:50]}...'"
-
-        # 2. Check against persistent cross-session history
+        from backend.question_agent.diversity_engine import QuestionDiversityEngine
         with self._lock:
-            cached_records = list(self.recent_records)
+            cached_texts = [r.get("text", "") for r in self.recent_records if r.get("text")]
 
-        for rec in cached_records:
-            prev_text = rec.get("text", "")
-            if not prev_text:
-                continue
-            sim = FingerprintEngine.calculate_similarity(candidate_text, prev_text)
-            if sim >= threshold:
-                return True, f"Too similar ({sim:.2f}) to recent candidate question: '{prev_text[:50]}...'"
+        is_dup, reason, _ = QuestionDiversityEngine.check_duplicate(
+            candidate_text=candidate_text,
+            session_asked_texts=session_asked_texts,
+            prior_candidate_texts=cached_texts,
+            threshold=threshold,
+        )
+        if is_dup:
+            return True, reason
 
         return False, ""
 
@@ -616,8 +611,9 @@ Ensure the rubric criteria max_marks sum up to exactly 5.0.
             scored.append((max_sim, q))
 
         scored.sort(key=lambda x: x[0])
-        # Return candidate with lowest maximum similarity
-        return scored[0][1]
+        min_sim = scored[0][0]
+        best_candidates = [q for sim, q in scored if sim <= min_sim + 0.05]
+        return random.choice(best_candidates)
 
 
 # Default global question generator

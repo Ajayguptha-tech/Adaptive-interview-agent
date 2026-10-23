@@ -27,6 +27,7 @@ class LLMClient:
         self.endpoint_url = endpoint_url
         self.model_name = model_name
         self.timeout = timeout
+        self.last_perf_stats: Dict[str, Any] = {}
 
     def check_health(self) -> Dict[str, Any]:
         """Checks if Ollama service is reachable and has the required model."""
@@ -59,10 +60,11 @@ class LLMClient:
         prompt: str,
         system_prompt: Optional[str] = None,
         temperature: float = 0.1,
+        options: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Sends a request to Ollama expecting structured JSON.
-        Validates and parses the JSON response.
+        Validates, parses the JSON response, and records latency & token metrics.
         """
         if system_prompt is None:
             system_prompt = (
@@ -72,6 +74,14 @@ class LLMClient:
                 "Never invent candidate evidence or award unearned marks."
             )
 
+        merged_options = {
+            "temperature": temperature,
+            "num_ctx": 2048,
+            "num_predict": 550,
+        }
+        if options:
+            merged_options.update(options)
+
         payload = {
             "model": self.model_name,
             "messages": [
@@ -80,13 +90,32 @@ class LLMClient:
             ],
             "format": "json",
             "stream": False,
-            "options": {"temperature": temperature},
+            "options": merged_options,
         }
 
         try:
             resp = requests.post(self.endpoint_url, json=payload, timeout=self.timeout)
             resp.raise_for_status()
             body = resp.json()
+
+            # Instrument Ollama performance metrics
+            total_ns = body.get("total_duration", 0)
+            p_eval_ns = body.get("prompt_eval_duration", 0)
+            eval_ns = body.get("eval_duration", 0)
+            eval_count = body.get("eval_count", 0)
+            p_eval_count = body.get("prompt_eval_count", 0)
+
+            tps = (eval_count / (eval_ns / 1e9)) if eval_ns > 0 else 0.0
+
+            self.last_perf_stats = {
+                "total_duration_ms": round(total_ns / 1e6, 2),
+                "prompt_eval_duration_ms": round(p_eval_ns / 1e6, 2),
+                "eval_duration_ms": round(eval_ns / 1e6, 2),
+                "prompt_eval_count": p_eval_count,
+                "eval_count": eval_count,
+                "tokens_per_second": round(tps, 2),
+            }
+
             content = body.get("message", {}).get("content", "")
             if not content:
                 raise ValueError("LLM returned empty content.")
@@ -108,3 +137,4 @@ class LLMClient:
 
 # Default global instance
 default_llm_client = LLMClient()
+

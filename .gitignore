@@ -68,6 +68,7 @@ frontend/tsconfig.app.tsbuildinfo
 
 # Logs & Temporary Files
 logs/
+scratch/
 *.log
 npm-debug.log*
 yarn-debug.log*

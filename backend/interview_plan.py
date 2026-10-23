@@ -90,6 +90,11 @@ PYTHON_SKILL_TOPIC_RULES = [
         "skills": ["exceptions", "error handling", "debugging"],
         "default": False,
     },
+    {
+        "topic": "Database & SQL Optimization",
+        "skills": ["sql", "postgresql", "mysql", "database", "sqlite", "sqlalchemy", "django", "orm", "indexing", "query optimization"],
+        "default": False,
+    },
 ]
 
 # Curriculum topic mapping rules for Full-Stack Track

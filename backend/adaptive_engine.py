@@ -166,6 +166,8 @@ class AdaptiveEngine:
         mode: InterviewMode,
         topics: Optional[List[str]] = None,
         use_dynamic: bool = False,
+        tech_stack: Optional[str] = None,
+        **kwargs,
     ) -> Tuple[Question, str]:
         """Selects or generates the opening question and provides a transparent rationale."""
         target_diff = {
@@ -175,10 +177,13 @@ class AdaptiveEngine:
             InterviewMode.ADAPTIVE: DifficultyLevel.BEGINNER,
         }[mode]
 
-        # Choose opening topic
+        # Choose opening topic grounded in candidate's blueprint or requested topics
         all_topics = get_all_topics()
         chosen_topic = "Data Structures & Mutability"
-        if topics:
+        if kwargs.get("blueprint") and kwargs["blueprint"].planned_topics:
+            if not topics:
+                chosen_topic = kwargs["blueprint"].planned_topics[0]
+        elif topics:
             all_topics_lower_map = {t.lower(): t for t in all_topics}
             matched = [all_topics_lower_map[t.lower()] for t in topics if t.lower() in all_topics_lower_map]
             if matched:
@@ -188,14 +193,42 @@ class AdaptiveEngine:
 
         target_type = QuestionType.CONCEPTUAL
 
-        chosen, gen_reason = default_question_generator.generate_or_select_question(
-            topic=chosen_topic,
-            competency="Python Fundamentals",
-            difficulty=target_diff,
-            question_type=target_type,
-            session_asked_ids=set(),
-            use_llm=use_dynamic,
-        )
+        if use_dynamic:
+            from backend.question_agent import default_question_agent
+            blueprint = kwargs.get("blueprint")
+            if not blueprint:
+                blueprint = default_question_agent.create_blueprint(
+                    resume_profile=kwargs.get("resume_profile"),
+                    target_role=kwargs.get("target_role", "Python Developer"),
+                    interview_mode=mode.value,
+                    difficulty_mode=mode.value,
+                    target_track="python",
+                    tech_stack=tech_stack,
+                    max_questions=kwargs.get("max_questions", 5),
+                    candidate_id=kwargs.get("candidate_id"),
+                )
+            # Re-check opening topic from newly constructed blueprint if needed
+            if not topics and blueprint.planned_topics:
+                chosen_topic = blueprint.planned_topics[0]
+
+            chosen, gen_reason = default_question_agent.select_or_generate_question(
+                blueprint=blueprint,
+                topic=chosen_topic,
+                competency=f"{blueprint.target_role} Competency",
+                difficulty=target_diff,
+                question_number=1,
+                session_asked_texts=[],
+                use_dynamic=True,
+            )
+        else:
+            chosen, gen_reason = default_question_generator.generate_or_select_question(
+                topic=chosen_topic,
+                competency="Python Fundamentals",
+                difficulty=target_diff,
+                question_type=target_type,
+                session_asked_ids=set(),
+                use_llm=False,
+            )
 
         reason = (
             f"Starting assessment in {mode.value} mode with foundational {chosen.question_type.value} question on "
@@ -214,6 +247,8 @@ class AdaptiveEngine:
         question_number: int = 2,
         session_asked_texts: Optional[List[str]] = None,
         use_dynamic: bool = False,
+        tech_stack: Optional[str] = None,
+        **kwargs,
     ) -> Tuple[Optional[Question], str]:
         """
         Selects or generates next question adaptively based on demonstrated understanding,
@@ -311,16 +346,42 @@ class AdaptiveEngine:
         )
 
         # Generate or select next question
-        chosen, gen_reason = default_question_generator.generate_or_select_question(
-            topic=target_topic,
-            competency="Python Technical Competency",
-            difficulty=target_diff,
-            question_type=target_type,
-            session_asked_ids=tracker.asked_question_ids,
-            session_asked_texts=session_asked_texts,
-            candidate_context=candidate_context,
-            use_llm=use_dynamic,
-        )
+        if use_dynamic:
+            from backend.question_agent import default_question_agent
+            blueprint = kwargs.get("blueprint")
+            if not blueprint:
+                blueprint = default_question_agent.create_blueprint(
+                    resume_profile=kwargs.get("resume_profile"),
+                    target_role=kwargs.get("target_role", "Python Developer"),
+                    interview_mode=mode.value,
+                    difficulty_mode=mode.value,
+                    target_track="python",
+                    tech_stack=tech_stack,
+                    max_questions=kwargs.get("max_questions", 5),
+                    candidate_id=kwargs.get("candidate_id"),
+                )
+            chosen, gen_reason = default_question_agent.select_or_generate_question(
+                blueprint=blueprint,
+                topic=target_topic,
+                competency="Python Technical Competency",
+                difficulty=target_diff,
+                question_number=question_number,
+                session_asked_texts=session_asked_texts,
+                candidate_context=candidate_context,
+                use_dynamic=True,
+                session_asked_ids=kwargs.get("session_asked_ids") or tracker.asked_question_ids,
+            )
+        else:
+            chosen, gen_reason = default_question_generator.generate_or_select_question(
+                topic=target_topic,
+                competency="Python Technical Competency",
+                difficulty=target_diff,
+                question_type=target_type,
+                session_asked_ids=tracker.asked_question_ids,
+                session_asked_texts=session_asked_texts,
+                candidate_context=candidate_context,
+                use_llm=False,
+            )
 
         full_reason = f"{reason_diff_change} {gen_reason}".strip()
         return chosen, full_reason

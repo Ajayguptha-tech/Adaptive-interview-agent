@@ -5,7 +5,7 @@ Covers question banks, rubrics, evaluations, sessions, and reports.
 
 from enum import Enum
 from typing import Dict, List, Optional, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class DifficultyLevel(str, Enum):
@@ -100,13 +100,15 @@ class Question(BaseModel):
         question_number: int = 1,
         total_questions: int = 5,
     ) -> QuestionDisplay:
-        resp_type = (
-            "code_writing" if self.question_type == QuestionType.CODE_WRITING
-            else "debugging" if self.question_type == QuestionType.DEBUGGING
-            else "code_output" if self.question_type == QuestionType.CODE_OUTPUT
-            else "verbal"
-        )
-        req_code = self.question_type in (QuestionType.CODE_WRITING, QuestionType.DEBUGGING)
+        req_code = bool(self.requires_code or self.question_type in (QuestionType.CODE_WRITING, QuestionType.DEBUGGING))
+        if req_code:
+            resp_type = "code_writing" if self.question_type == QuestionType.CODE_WRITING else "debugging"
+        elif self.question_type == QuestionType.CODE_OUTPUT:
+            resp_type = "code_output"
+        elif getattr(self, "response_type", None) and self.response_type != "verbal":
+            resp_type = self.response_type
+        else:
+            resp_type = "verbal"
 
         return QuestionDisplay(
             question_number=question_number,
@@ -116,8 +118,8 @@ class Question(BaseModel):
             competency=self.competency,
             difficulty=self.difficulty,
             question_type=self.question_type,
-            response_type=getattr(self, "response_type", None) or resp_type,
-            requires_code=getattr(self, "requires_code", None) if hasattr(self, "requires_code") else req_code,
+            response_type=resp_type,
+            requires_code=req_code,
             text=self.text,
             code_snippet=self.code_snippet,
             max_marks=self.total_marks,
@@ -168,14 +170,28 @@ class QuestionRecord(BaseModel):
 
 class PrepareInterviewRequest(BaseModel):
     resume_id: str
+    candidate_id: Optional[str] = None
     target_role: Optional[str] = None
     interview_mode: str = "mock"  # "mock" (dynamic) or "predefined"
-    max_questions: int = Field(default=5, ge=1, le=25)
+    max_questions: int = Field(default=5, ge=5, le=10, description="Configured interview length (strictly 5 to 10 questions)")
     difficulty_mode: InterviewMode = InterviewMode.ADAPTIVE
     tech_stack: Optional[str] = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "question_count" in data and "max_questions" not in data:
+                data["max_questions"] = data["question_count"]
+            if "mode" in data and "interview_mode" not in data:
+                data["interview_mode"] = data["mode"]
+            if "difficulty" in data and "difficulty_mode" not in data:
+                data["difficulty_mode"] = data["difficulty"]
+        return data
+
 
 class StartInterviewRequest(BaseModel):
+    candidate_id: Optional[str] = None
     role: str = "Python Developer"
     track: Optional[str] = Field(default=None, description="Optional track: 'python' or 'fullstack'. If omitted, automatically determined from resume.")
     tech_stack: Optional[str] = None  # e.g. "React + Node.js + Express + SQL"
@@ -195,9 +211,29 @@ class StartInterviewRequest(BaseModel):
     dynamic_questions: bool = True
     resume_id: Optional[str] = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "target_questions" in data and "max_questions" not in data:
+                data["max_questions"] = data["target_questions"]
+            elif "question_count" in data and "max_questions" not in data:
+                data["max_questions"] = data["question_count"]
+            if "difficulty" in data and "difficulty_mode" not in data:
+                data["difficulty_mode"] = data["difficulty"]
+            if "mode" in data:
+                m = str(data["mode"]).lower()
+                if m == "predefined":
+                    data["dynamic_questions"] = False
+                elif m == "mock":
+                    data["dynamic_questions"] = True
+        return data
+
 
 class AnswerRequest(BaseModel):
     answer: str
+    question_id: Optional[str] = None
+    question_number: Optional[int] = None
 
 
 class EndInterviewRequest(BaseModel):
@@ -248,5 +284,119 @@ class FinalReport(BaseModel):
     recommendations: List[str]
     strongest_demonstrations: List[Dict[str, str]]
     suggested_study_topics: List[str]
+    integrity_summary: Optional[Dict[str, Any]] = None
+    decision_recommendation: Optional[Dict[str, Any]] = None
     history: List[Dict[str, Any]]
     note: str
+
+
+class IntegrityEventType(str, Enum):
+    FOCUS_LOSS = "focus_loss"
+    TAB_SWITCH = "tab_switch"
+    WINDOW_BLUR = "window_blur"
+    AUDIO_ANOMALY = "audio_anomaly"
+    STREAM_INTERRUPTED = "stream_interrupted"
+    MANUAL_FLAG = "manual_flag"
+    LATENCY_SPIKE = "latency_spike"
+
+
+class IntegritySeverity(str, Enum):
+    INFO = "info"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class IntegrityReviewStatus(str, Enum):
+    PENDING_REVIEW = "pending_review"
+    VERIFIED_BENIGN = "verified_benign"
+    VERIFIED_TECHNICAL = "verified_technical"
+    REQUIRES_FOLLOWUP = "requires_followup"
+
+
+class IntegrityEventCreateRequest(BaseModel):
+    event_type: str = "window_blur"
+    severity: str = "info"
+    confidence: float = 85.0
+    title: str = "Window Focus Transition"
+    description: str = "Candidate window temporarily transitioned focus away from interview window."
+    timestamp_offset_seconds: Optional[float] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class IntegrityEventRecord(BaseModel):
+    id: str
+    session_id: str
+    candidate_id: Optional[str] = None
+    timestamp_offset_seconds: float = 0.0
+    timestamp_iso: str = ""
+    event_type: str
+    severity: str
+    confidence: float
+    title: str
+    description: str
+    recruiter_status: str = "pending_review"
+    recruiter_notes: Optional[str] = None
+    created_at: str = ""
+
+
+class IntegrityEventUpdateRequest(BaseModel):
+    status: str
+    notes: Optional[str] = None
+
+
+class IntegritySummary(BaseModel):
+    session_id: str
+    total_events: int = 0
+    focus_loss_count: int = 0
+    tab_switch_count: int = 0
+    audio_anomaly_count: int = 0
+    stream_interruption_count: int = 0
+    manual_flags_count: int = 0
+    pending_review_count: int = 0
+    verified_benign_count: int = 0
+    requires_followup_count: int = 0
+    ethical_notice: str = (
+        "Telemetry observations represent raw sensory and browser events, never definitive allegations of cheating. "
+        "Observations must be evaluated in contextual totality by human hiring panel."
+    )
+
+
+class DecisionOutcome(str, Enum):
+    PROCEED_TO_HUMAN_REVIEW = "proceed_to_human_review"
+    REQUEST_FOLLOW_UP = "request_follow_up"
+    CONSIDER_ALTERNATE_ROLE = "consider_alternate_role"
+    NEEDS_FURTHER_EVALUATION = "needs_further_evaluation"
+
+
+class CandidateDecisionRecord(BaseModel):
+    session_id: str
+    candidate_id: str
+    candidate_name: str
+    target_role: str
+    track: str
+    normalized_score: float
+    grade: str
+    outcome: str = DecisionOutcome.PROCEED_TO_HUMAN_REVIEW.value
+    confidence_score: float = 90.0
+    executive_summary: str = ""
+    demonstrated_competencies: List[str] = Field(default_factory=list)
+    critical_gaps: List[str] = Field(default_factory=list)
+    unvalidated_claims: List[str] = Field(default_factory=list)
+    prerequisites_satisfied: bool = True
+    integrity_review_needed: bool = False
+    evidence_points_count: int = 0
+    recruiter_outcome_override: Optional[str] = None
+    recruiter_notes: Optional[str] = None
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class CandidateDecisionUpdateRequest(BaseModel):
+    outcome: str
+    notes: Optional[str] = None
+
+
+class CandidateComparisonRequest(BaseModel):
+    session_ids: List[str]
+

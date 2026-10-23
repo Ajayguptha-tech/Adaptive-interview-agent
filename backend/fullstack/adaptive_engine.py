@@ -176,6 +176,7 @@ class FullStackAdaptiveEngine:
         topics: Optional[List[str]] = None,
         use_dynamic: bool = True,
         tech_stack: Optional[str] = None,
+        **kwargs,
     ) -> Tuple[Question, str]:
         from backend.fullstack.question_generator import default_fullstack_generator
 
@@ -189,15 +190,42 @@ class FullStackAdaptiveEngine:
         candidate_topics = topics or get_all_fullstack_topics()
         target_topic = candidate_topics[0]
 
-        chosen, gen_reason = default_fullstack_generator.generate_or_select_question(
-            topic=target_topic,
-            competency="Full-Stack Technical Competency",
-            difficulty=target_diff,
-            question_type=QuestionType.CONCEPTUAL,
-            session_asked_ids=set(),
-            use_llm=use_dynamic,
-            tech_stack=tech_stack,
-        )
+        if use_dynamic:
+            from backend.question_agent import default_question_agent
+            blueprint = kwargs.get("blueprint")
+            if not blueprint:
+                blueprint = default_question_agent.create_blueprint(
+                    resume_profile=kwargs.get("resume_profile"),
+                    target_role="Full-Stack Developer",
+                    interview_mode=mode.value,
+                    difficulty_mode=mode.value,
+                    target_track="fullstack",
+                    tech_stack=tech_stack,
+                    max_questions=kwargs.get("max_questions", 5),
+                    candidate_id=kwargs.get("candidate_id"),
+                )
+            if not topics and blueprint.planned_topics:
+                target_topic = blueprint.planned_topics[0]
+
+            chosen, gen_reason = default_question_agent.select_or_generate_question(
+                blueprint=blueprint,
+                topic=target_topic,
+                competency=f"{blueprint.target_role} Competency",
+                difficulty=target_diff,
+                question_number=1,
+                session_asked_texts=[],
+                use_dynamic=True,
+            )
+        else:
+            chosen, gen_reason = default_fullstack_generator.generate_or_select_question(
+                topic=target_topic,
+                competency="Full-Stack Technical Competency",
+                difficulty=target_diff,
+                question_type=QuestionType.CONCEPTUAL,
+                session_asked_ids=set(),
+                use_llm=False,
+                tech_stack=tech_stack,
+            )
 
         reason = (
             f"Starting Full-Stack assessment in {mode.value} mode with foundational "
@@ -217,6 +245,7 @@ class FullStackAdaptiveEngine:
         session_asked_texts: Optional[List[str]] = None,
         use_dynamic: bool = True,
         tech_stack: Optional[str] = None,
+        **kwargs,
     ) -> Tuple[Optional[Question], str]:
         from backend.fullstack.question_generator import default_fullstack_generator
 
@@ -253,9 +282,16 @@ class FullStackAdaptiveEngine:
             else:
                 reason_diff_change = f"Maintaining {target_diff.value} level following steady performance ({score:.0f}%)."
 
-        # 2. Topic balancing: prioritize unassessed topics
+        # 2. Topic balancing: prioritize unassessed topics with matching difficulty
         unassessed = tracker.get_unassessed_topics(allowed_topics)
-        if unassessed:
+        all_bank_questions = get_all_fullstack_questions()
+        matching_diff_topics = [
+            t for t in unassessed
+            if any(q.topic == t and q.difficulty == target_diff and q.id not in tracker.asked_question_ids for q in all_bank_questions)
+        ]
+        if matching_diff_topics:
+            target_topic = matching_diff_topics[0]
+        elif unassessed:
             target_topic = unassessed[0]
         elif allowed_topics:
             target_topic = allowed_topics[(question_number - 1) % len(allowed_topics)]
@@ -280,17 +316,43 @@ class FullStackAdaptiveEngine:
         }
 
         # 5. Generate or select question
-        chosen, gen_reason = default_fullstack_generator.generate_or_select_question(
-            topic=target_topic,
-            competency="Full-Stack Engineering",
-            difficulty=target_diff,
-            question_type=target_type,
-            session_asked_ids=tracker.asked_question_ids,
-            session_asked_texts=session_asked_texts,
-            candidate_context=candidate_context,
-            use_llm=use_dynamic,
-            tech_stack=tech_stack,
-        )
+        if use_dynamic:
+            from backend.question_agent import default_question_agent
+            blueprint = kwargs.get("blueprint")
+            if not blueprint:
+                blueprint = default_question_agent.create_blueprint(
+                    resume_profile=kwargs.get("resume_profile"),
+                    target_role="Full-Stack Developer",
+                    interview_mode=mode.value,
+                    difficulty_mode=mode.value,
+                    target_track="fullstack",
+                    tech_stack=tech_stack,
+                    max_questions=kwargs.get("max_questions", 5),
+                    candidate_id=kwargs.get("candidate_id"),
+                )
+            chosen, gen_reason = default_question_agent.select_or_generate_question(
+                blueprint=blueprint,
+                topic=target_topic,
+                competency="Full-Stack Engineering",
+                difficulty=target_diff,
+                question_number=question_number,
+                session_asked_texts=session_asked_texts,
+                candidate_context=candidate_context,
+                use_dynamic=True,
+                session_asked_ids=kwargs.get("session_asked_ids") or tracker.asked_question_ids,
+            )
+        else:
+            chosen, gen_reason = default_fullstack_generator.generate_or_select_question(
+                topic=target_topic,
+                competency="Full-Stack Engineering",
+                difficulty=target_diff,
+                question_type=target_type,
+                session_asked_ids=tracker.asked_question_ids,
+                session_asked_texts=session_asked_texts,
+                candidate_context=candidate_context,
+                use_llm=False,
+                tech_stack=tech_stack,
+            )
 
         full_reason = f"{reason_diff_change} {gen_reason}".strip()
         return chosen, full_reason
