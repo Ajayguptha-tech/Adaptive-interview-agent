@@ -1023,7 +1023,8 @@ async def transcribe_uploaded_audio(session_id: str, file: UploadFile = File(...
     if not session:
         raise HTTPException(status_code=404, detail="Session not found.")
 
-    temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    upload_suffix = Path(file.filename or "audio.wav").suffix or ".wav"
+    temp_file = tempfile.NamedTemporaryFile(suffix=upload_suffix, delete=False)
     temp_path = temp_file.name
     try:
         content = await file.read()

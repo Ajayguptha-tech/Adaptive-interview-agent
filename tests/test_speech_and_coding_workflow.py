@@ -240,3 +240,82 @@ class TestSessionIdempotencyAndPersistence:
             history_data = loaded_dict["history"]
             assert len(history_data) == 1
             assert history_data[0]["evaluation"]["awarded_marks"] == 4.5
+
+
+class TestSpeechBridgeBuiltin:
+    """Tests the in-tree BuiltinSpeechAssistant and SpeechBridge."""
+
+    def test_builtin_speech_assistant_available_when_external_missing(self, monkeypatch):
+        import backend.speech_bridge as sb
+        # Force external import to fail
+        monkeypatch.setattr(sb, "_STT_CLASS", None)
+        bridge = sb.SpeechBridge()
+        stt = bridge.get_stt()
+        assert stt is not None
+        status = bridge.get_status()
+        assert status["stt"]["available"] is True
+        assert status["stt"]["engine"] in ("google", "google_cloud_stt")
+
+    def test_builtin_speech_assistant_handles_silent_audio(self):
+        import soundfile as sf
+        import numpy as np
+        from backend.speech_bridge import BuiltinSpeechAssistant
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            wav_path = f.name
+
+        try:
+            # 1 second silence
+            sf.write(wav_path, np.zeros(16000), 16000, format="WAV", subtype="PCM_16")
+            assistant = BuiltinSpeechAssistant()
+            result = assistant.transcribe_file(wav_path)
+            # Silence should cleanly produce is_success=False without unhandled exception
+            assert result.is_success is False
+            assert "no recognizable speech" in result.error_message.lower()
+        finally:
+            import os
+            if os.path.exists(wav_path):
+                os.remove(wav_path)
+
+
+class TestQuestionGeneratorFastFallback:
+    """Verifies fast fallback when LLM service is disconnected."""
+
+    def test_generator_fast_fallback_on_connection_error(self, monkeypatch):
+        from backend.question_agent.generator import QuestionGeneratorEngine
+        from backend.question_agent.models import InterviewBlueprint, QuestionFormat
+        from backend.models import DifficultyLevel
+        from backend.llm_client import LLMClient
+
+        client = LLMClient(endpoint_url="http://127.0.0.1:99999/api/chat")
+        # Simulate connection error
+        def raise_conn_err(*args, **kwargs):
+            raise RuntimeError("Ollama connection error: Is Ollama running?")
+
+        monkeypatch.setattr(client, "generate_json", raise_conn_err)
+
+        engine = QuestionGeneratorEngine(llm_client=client)
+        bp = InterviewBlueprint(
+            target_role="Python Developer",
+            target_track="python",
+            total_questions=5,
+            planned_topics=["Algorithms", "Data Structures"],
+        )
+
+        import time
+        t0 = time.perf_counter()
+        question, reason, candidate = engine.generate_candidate_question(
+            blueprint=bp,
+            topic="Algorithms",
+            competency="Data Structures",
+            difficulty=DifficultyLevel.INTERMEDIATE,
+            question_format=QuestionFormat.TECHNICAL_FUNDAMENTALS,
+            session_asked_texts=[],
+        )
+        elapsed = time.perf_counter() - t0
+
+        # Must fall back fast (< 1.0s) instead of stalling across 3 retries
+        assert elapsed < 1.0
+        assert question is not None
+        assert "from catalog" in reason or "Selected" in reason
+        assert candidate.source_type == "catalog_curated"

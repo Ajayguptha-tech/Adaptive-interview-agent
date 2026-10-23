@@ -34,6 +34,83 @@ _STT_CLASS = None
 _TTS_CLASS = None
 
 
+class BuiltinSpeechAssistant:
+    """
+    Self-contained in-tree Speech-to-Text assistant utilizing SpeechRecognition.
+    Operates portably on Render/Linux, Windows, and macOS without requiring external directories.
+    """
+
+    def __init__(self):
+        self._sr = None
+        self._sf = None
+
+    def _get_sr(self):
+        if self._sr is None:
+            import speech_recognition as sr
+            self._sr = sr
+        return self._sr
+
+    def _get_sf(self):
+        if self._sf is None:
+            import soundfile as sf
+            self._sf = sf
+        return self._sf
+
+    def list_audio_devices(self) -> List[Dict[str, Any]]:
+        return []
+
+    def transcribe_file(self, audio_path: str, language: str = "en-US") -> Any:
+        class Result:
+            def __init__(self, is_success: bool, text: str = "", error_message: Optional[str] = None, engine: str = "google_cloud"):
+                self.is_success = is_success
+                self.text = text
+                self.error_message = error_message
+                self.engine = engine
+
+        if not os.path.exists(audio_path):
+            return Result(False, "", "Audio file not found.")
+
+        try:
+            sr = self._get_sr()
+        except ImportError as exc:
+            return Result(False, "", f"SpeechRecognition library not available: {exc}")
+
+        wav_path = audio_path
+        converted = False
+        try:
+            sf = self._get_sf()
+            data, samplerate = sf.read(audio_path)
+            if len(data.shape) > 1 and data.shape[1] > 1:
+                data = data.mean(axis=1)
+
+            temp_wav = tempfile.NamedTemporaryFile(suffix="_pcm.wav", delete=False)
+            wav_path = temp_wav.name
+            temp_wav.close()
+            sf.write(wav_path, data, samplerate, format="WAV", subtype="PCM_16")
+            converted = True
+        except Exception as conv_err:
+            logger.info(f"Direct WAV processing without soundfile conversion: {conv_err}")
+
+        recognizer = sr.Recognizer()
+        try:
+            with sr.AudioFile(wav_path) as source:
+                audio = recognizer.record(source)
+            text = recognizer.recognize_google(audio, language=language)
+            return Result(True, text=text.strip(), engine="google_cloud_stt")
+        except sr.UnknownValueError:
+            return Result(False, "", "Audio file contained no recognizable speech.")
+        except sr.RequestError as exc:
+            return Result(False, "", f"Speech recognition service unavailable: {exc}")
+        except Exception as exc:
+            return Result(False, "", f"Transcription failed: {exc}")
+        finally:
+            if converted and os.path.exists(wav_path):
+                try:
+                    os.remove(wav_path)
+                except Exception:
+                    pass
+
+
 def _get_stt_class():
     global _STT_CLASS
     if _STT_CLASS is None:
@@ -41,7 +118,8 @@ def _get_stt_class():
             from speech_to_text import SpeechToTextAssistant
             _STT_CLASS = SpeechToTextAssistant
         except ImportError as exc:
-            logger.warning(f"Could not import SpeechToTextAssistant: {exc}")
+            logger.info(f"External SpeechToTextAssistant not found ({exc}). Using BuiltinSpeechAssistant.")
+            _STT_CLASS = BuiltinSpeechAssistant
     return _STT_CLASS
 
 
@@ -127,6 +205,7 @@ class SpeechBridge:
             },
             "stt": {
                 "available": stt_available,
+                "engine": getattr(getattr(stt, "config", None), "engine", "google_cloud_stt") if stt else None,
                 "devices_count": len(stt_devices),
                 "devices": stt_devices,
             },

@@ -5,6 +5,7 @@ import { InterviewService } from '../../services/interviewService';
 import { useMicRecorder } from '../../hooks/useMicRecorder';
 import { STTService } from '../../services/stt';
 import { TTSService } from '../../services/tts';
+import { apiRequest } from '../../api/apiClient';
 import { 
   FileText, 
   UploadCloud, 
@@ -376,8 +377,9 @@ export const CandidateInterviewFlow: React.FC = () => {
     setSubmitError(null);
 
     // Stop mic exactly once
+    let recordedBlob: Blob | null = null;
     if (isRecording || isRecordingConfirmed) {
-      await stopRecording();
+      recordedBlob = await stopRecording();
       setIsRecordingConfirmed(false);
     }
     const flushedSTT = STTService.stop();
@@ -387,9 +389,34 @@ export const CandidateInterviewFlow: React.FC = () => {
     }
 
     const domText = (document.getElementById('transcript-input') as HTMLTextAreaElement)?.value || '';
-    const answerToSubmit = isCodingQuestion 
+    let answerToSubmit = isCodingQuestion 
       ? (codeAnswer || domText).trim() 
       : (flushedSTT || finalTranscript || interimTranscript || answerText || domText).trim();
+
+    // If verbal question has no transcript yet from Web Speech API, but audio was recorded,
+    // upload to backend for server-side transcription fallback
+    if (!isCodingQuestion && !answerToSubmit && recordedBlob && recordedBlob.size > 500 && backendSessionId) {
+      try {
+        setVoiceState('transcribing');
+        const formData = new FormData();
+        const ext = recordedBlob.type.includes('webm') ? 'webm' : (recordedBlob.type.includes('ogg') ? 'ogg' : 'wav');
+        formData.append('file', recordedBlob, `answer_audio.${ext}`);
+        const txResp = await apiRequest<{ is_success: boolean; transcript: string; error_message?: string }>(
+          `api/interview/${backendSessionId}/transcribe_upload`,
+          {
+            method: 'POST',
+            body: formData,
+          }
+        );
+        if (txResp?.is_success && txResp.transcript) {
+          answerToSubmit = txResp.transcript.trim();
+          setFinalTranscript(answerToSubmit);
+          setAnswerText(answerToSubmit);
+        }
+      } catch (sttErr) {
+        console.warn('Backend audio transcription fallback failed:', sttErr);
+      }
+    }
 
     if (!answerToSubmit) {
       setSubmitError(

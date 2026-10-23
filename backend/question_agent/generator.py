@@ -152,6 +152,11 @@ class QuestionGeneratorEngine:
                 except Exception as exc:
                     logger.warning("[GENERATION_ERROR] Attempt %d failed: %s", attempt, exc)
                     rejected_reasons.append(f"Engine exception: {str(exc)[:60]}")
+                    # If LLM service is unreachable, bypass remaining retries and fallback immediately
+                    err_str = str(exc).lower()
+                    if "connection error" in err_str or "connection refused" in err_str or "connecterror" in err_str:
+                        logger.info("[GENERATION_FAST_FALLBACK] LLM service unreachable. Fast-falling back to QuestionCatalog.")
+                        break
 
         # Layer 6 Fallback: select unasked question from catalog
         self.fallback_count += 1

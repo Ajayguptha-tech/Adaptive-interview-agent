@@ -28,13 +28,14 @@ class LLMClient:
         self.model_name = model_name
         self.timeout = timeout
         self.last_perf_stats: Dict[str, Any] = {}
+        self._session = requests.Session()
 
     def check_health(self) -> Dict[str, Any]:
         """Checks if Ollama service is reachable and has the required model."""
         base_url = self.endpoint_url.replace("/api/chat", "")
         tags_url = f"{base_url}/api/tags"
         try:
-            resp = requests.get(tags_url, timeout=5)
+            resp = self._session.get(tags_url, timeout=5)
             resp.raise_for_status()
             data = resp.json()
             models = data.get("models", [])
@@ -77,7 +78,7 @@ class LLMClient:
         merged_options = {
             "temperature": temperature,
             "num_ctx": 2048,
-            "num_predict": 550,
+            "num_predict": 420,
         }
         if options:
             merged_options.update(options)
@@ -90,12 +91,12 @@ class LLMClient:
             ],
             "format": "json",
             "stream": False,
-            "keep_alive": "15m",
+            "keep_alive": "60m",
             "options": merged_options,
         }
 
         try:
-            resp = requests.post(self.endpoint_url, json=payload, timeout=self.timeout)
+            resp = self._session.post(self.endpoint_url, json=payload, timeout=self.timeout)
             resp.raise_for_status()
             body = resp.json()
 
