@@ -143,14 +143,25 @@ def home(request: Request):
 
 @app.get("/api/health")
 def health():
-    """Health check for API and Ollama service."""
-    ollama_status = default_llm_client.check_health()
-    return {
+    """Health check for API and AI service."""
+    ai_status = default_llm_client.check_health()
+    provider = ai_status.get("provider", getattr(default_llm_client, "provider", "ollama"))
+    is_available = bool(ai_status.get("available", False))
+    connection_status = "connected" if is_available else "disconnected"
+
+    response = {
         "api": "running",
-        "ollama": "connected" if ollama_status["available"] else "disconnected",
-        "required_model_available": ollama_status["has_required_model"],
-        "models": ollama_status.get("models", []),
+        "provider": provider,
+        "status": connection_status,
+        "ollama": connection_status if provider == "ollama" else "disconnected",
+        "required_model_available": ai_status.get("has_required_model", False),
+        "models": ai_status.get("models", []),
     }
+    if provider == "gemini":
+        response["gemini"] = connection_status
+    if "error" in ai_status:
+        response["error"] = ai_status["error"]
+    return response
 
 
 @app.get("/api/tracks")
@@ -1023,19 +1034,10 @@ async def transcribe_uploaded_audio(session_id: str, file: UploadFile = File(...
     if not session:
         raise HTTPException(status_code=404, detail="Session not found.")
 
-    upload_suffix = Path(file.filename or "audio.wav").suffix or ".wav"
-    temp_file = tempfile.NamedTemporaryFile(suffix=upload_suffix, delete=False)
+    temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
     temp_path = temp_file.name
     try:
         content = await file.read()
-        if not content or len(content) == 0:
-            temp_file.close()
-            return {
-                "session_id": session_id,
-                "is_success": False,
-                "transcript": "",
-                "error_message": "Uploaded audio file was empty.",
-            }
         temp_file.write(content)
         temp_file.close()
 
