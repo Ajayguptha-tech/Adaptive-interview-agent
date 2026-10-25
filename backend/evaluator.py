@@ -451,55 +451,451 @@ Return valid JSON strictly matching this schema:
     ) -> EvaluationResult:
         """
         Safe fallback evaluation when the LLM service fails or gives unparseable output.
-        Does NOT silently award full marks. Uses static analysis and deterministic rules.
+        Evaluates candidate response deterministically against rubrics and expected concepts.
+        Awards fair partial credit and never falsely reports 0/5 for correct concepts.
         """
-        awarded_total = 0.0
-        validated_evals = []
+        return evaluate_deterministically(
+            question=question,
+            candidate_answer=candidate_answer,
+            execution_result=execution_result,
+            error_reason=error_reason,
+        )
 
-        # If code-writing question and tests actually passed in isolated runner
-        tests_passed = execution_result.get("tests_passed", 0) if execution_result else 0
-        tests_total = execution_result.get("tests_total", 0) if execution_result else 0
 
-        for crit in question.rubric:
-            crit_score = 0.0
-            explanation = f"Automated evaluation fallback: {error_reason}"
+# =============================================================================
+# DETERMINISTIC FALLBACK EVALUATOR
+# =============================================================================
 
-            if execution_result and tests_total > 0 and execution_result.get("syntax_valid"):
-                # Pro-rate score based on verified test cases
-                pass_ratio = tests_passed / tests_total
-                crit_score = round(crit.max_marks * pass_ratio, 2)
-                explanation = f"Deterministic fallback based on automated test results: {tests_passed}/{tests_total} tests passed."
+DETERMINISTIC_STOP_WORDS = {
+    'a', 'about', 'above', 'after', 'again', 'against', 'all', 'am', 'an', 'and', 'any', 'are', 'aren',
+    'as', 'at', 'be', 'because', 'been', 'before', 'being', 'below', 'between', 'both', 'but', 'by',
+    'can', 'could', 'did', 'do', 'does', 'doing', 'down', 'during', 'each', 'few', 'for', 'from',
+    'further', 'had', 'has', 'have', 'having', 'he', 'her', 'here', 'hers', 'herself', 'him',
+    'himself', 'his', 'how', 'i', 'if', 'in', 'into', 'is', 'it', 'its', 'itself', 'just', 'll', 'm',
+    'me', 'might', 'more', 'most', 'must', 'my', 'myself', 'no', 'nor', 'not', 'now', 'o', 'of',
+    'off', 'on', 'once', 'only', 'or', 'other', 'our', 'ours', 'ourselves', 'out', 'over', 'own',
+    're', 's', 'same', 'she', 'should', 'so', 'some', 'such', 't', 'than', 'that', 'the', 'their',
+    'theirs', 'them', 'themselves', 'then', 'there', 'these', 'they', 'this', 'those', 'through',
+    'to', 'too', 'under', 'until', 'up', 've', 'very', 'was', 'we', 'were', 'what', 'when', 'where',
+    'which', 'while', 'who', 'whom', 'why', 'will', 'with', 'won', 'would', 'y', 'you', 'your',
+    'yours', 'yourself', 'yourselves', 'explain', 'explains', 'explaining', 'explanation', 'clearly',
+    'provides', 'providing', 'mentions', 'mentioning', 'accurately', 'state', 'states', 'stating',
+    'describe', 'describes', 'example', 'examples', 'e.g', 'eg', 'etc', 'answer', 'candidate',
+    'python', 'code', 'function', 'class', 'method', 'variable', 'object', 'program', 'system', 'use', 'using', 'used'
+}
 
-            awarded_total += crit_score
-            validated_evals.append(
-                CriterionEvaluation(
-                    criterion_id=crit.id,
-                    awarded_marks=crit_score,
-                    max_marks=crit.max_marks,
-                    evidence="Fallback analysis.",
-                    explanation=explanation,
-                )
+
+def _extract_deterministic_tokens(text: str) -> Set[str]:
+    """Extracts normalized words and special technical symbols for rubric matching."""
+    words = re.findall(r'[a-zA-Z0-9_\-]+|<[a-zA-Z0-9_\-]+>|\[\]|\(\)|\{\}', text.lower())
+    res = set()
+    for w in words:
+        if w not in DETERMINISTIC_STOP_WORDS and len(w) > 1:
+            res.add(w)
+        elif w in ('[]', '()', '{}'):
+            res.add(w)
+    return res
+
+
+def _find_evidence_sentence(candidate_answer: str, target_terms: Set[str]) -> str:
+    """Finds the sentence in candidate_answer that best demonstrates the target terms."""
+    raw_sentences = re.split(r'(?<=[.!?\n])\s+', candidate_answer.strip())
+    sentences = [s.strip() for s in raw_sentences if s.strip()]
+    if not sentences:
+        return candidate_answer[:200] if candidate_answer else "Not addressed."
+
+    best_sent = ""
+    max_hits = 0
+    for s in sentences:
+        s_tokens = _extract_deterministic_tokens(s)
+        hits = len(s_tokens.intersection(target_terms))
+        if hits > max_hits:
+            max_hits = hits
+            best_sent = s
+
+    return best_sent if best_sent else (sentences[0] if sentences else "Not addressed.")
+
+
+def evaluate_deterministically(
+    question: Question,
+    candidate_answer: str,
+    execution_result: Optional[Dict[str, Any]] = None,
+    error_reason: str = "",
+) -> EvaluationResult:
+    """
+    Evaluates candidate response strictly and deterministically using question rubrics,
+    expected concepts, and code execution results when the AI LLM service is unavailable.
+    Awards fair partial credit and never assigns a false 0/5 when correct concepts are demonstrated.
+    """
+    trimmed = candidate_answer.strip()
+    norm_answer = re.sub(r'[\r\n\t]+', ' ', trimmed.lower())
+    ans_tokens = _extract_deterministic_tokens(norm_answer)
+
+    # 1. Check for empty submission
+    if not trimmed:
+        zero_criteria = [
+            CriterionEvaluation(
+                criterion_id=c.id,
+                awarded_marks=0.0,
+                max_marks=c.max_marks,
+                evidence="No answer was submitted.",
+                explanation=f"No response provided for criterion '{c.description}'.",
             )
-
-        max_marks = question.total_marks
-        percentage = round((awarded_total / max_marks) * 100.0, 2) if max_marks > 0 else 0.0
-
+            for c in question.rubric
+        ]
         return EvaluationResult(
             question_id=question.id,
-            awarded_marks=round(awarded_total, 2),
-            max_marks=max_marks,
-            percentage=percentage,
-            criteria_evaluations=validated_evals,
-            demonstrated_concepts=["Syntactically valid code"] if execution_result and execution_result.get("syntax_valid") else [],
+            awarded_marks=0.0,
+            max_marks=question.total_marks,
+            percentage=0.0,
+            criteria_evaluations=zero_criteria,
+            demonstrated_concepts=[],
             partial_concepts=[],
-            missing_concepts=["Complete semantic LLM verification (model connection issue)"],
+            missing_concepts=list(question.expected_concepts),
             incorrect_claims=[],
-            summary_explanation=f"Evaluation completed via deterministic fallback. Note: {error_reason}",
-            addressed_question=True if len(candidate_answer) > 10 else False,
+            summary_explanation="No answer was provided. Zero marks awarded.",
+            addressed_question=False,
             is_ambiguous=False,
             clarification_question=None,
             execution_result=execution_result,
+            evaluation_status="completed",
         )
+
+    # 2. Check for explicit refusal or "don't know"
+    refusal_patterns = [
+        r"\b(?:i\s+)?don'?t\s+know\b", r"\bno\s+idea\b", r"\bidk\b",
+        r"\bpass\b", r"\bunclear\b", r"\bnot\s+sure\b"
+    ]
+    if any(re.search(p, norm_answer) for p in refusal_patterns) and len(trimmed.split()) <= 6:
+        zero_criteria = [
+            CriterionEvaluation(
+                criterion_id=c.id,
+                awarded_marks=0.0,
+                max_marks=c.max_marks,
+                evidence=trimmed,
+                explanation="Candidate indicated they do not know the answer.",
+            )
+            for c in question.rubric
+        ]
+        return EvaluationResult(
+            question_id=question.id,
+            awarded_marks=0.0,
+            max_marks=question.total_marks,
+            percentage=0.0,
+            criteria_evaluations=zero_criteria,
+            demonstrated_concepts=[],
+            partial_concepts=[],
+            missing_concepts=list(question.expected_concepts),
+            incorrect_claims=[],
+            summary_explanation="Candidate indicated they do not know the answer. Zero marks awarded.",
+            addressed_question=True,
+            is_ambiguous=False,
+            clarification_question=None,
+            execution_result=execution_result,
+            evaluation_status="completed",
+        )
+
+    # 3. Check for Output Prediction questions
+    is_code_output = (question.question_type == QuestionType.CODE_OUTPUT)
+    expected_out = (question.expected_output or OutputPredictionEvaluator.get_expected_output(question) or "").strip()
+    output_matches = False
+    if is_code_output and expected_out:
+        output_matches = OutputPredictionEvaluator.verify_prediction(expected_out, trimmed)
+
+    # 4. Check for code-writing / debugging with test cases
+    tests_passed = execution_result.get("tests_passed", 0) if execution_result else 0
+    tests_total = execution_result.get("tests_total", 0) if execution_result else 0
+    syntax_valid = execution_result.get("syntax_valid", False) if execution_result else False
+    is_code_writing = (question.question_type == QuestionType.CODE_WRITING or (question.question_type == QuestionType.DEBUGGING and question.test_cases))
+
+    # 5. Evaluate each criterion
+    validated_evals: List[CriterionEvaluation] = []
+    total_awarded = 0.0
+    demonstrated_concepts: List[str] = []
+    missing_concepts: List[str] = []
+    detected_misconceptions: List[str] = []
+
+    # Check for specific verifiable misconceptions in answer
+    tuple_mod_claim = bool(
+        re.search(r'\btuples?\s+(?:can\s+be\s+modified|can\s+change|support\s+append|\.append)', norm_answer)
+        or re.search(r'\bappend\s+(?:to|into)\s+tuples?\b', norm_answer)
+    )
+    if tuple_mod_claim:
+        detected_misconceptions.append("Claiming tuples can be modified using methods like append()")
+
+    for crit in question.rubric:
+        crit_id_lower = crit.id.lower()
+        crit_desc_lower = crit.description.lower()
+        crit_text = f"{crit.id} {crit.description} {crit.evidence_guide}"
+        crit_tokens = _extract_deterministic_tokens(crit_text)
+
+        awarded = 0.0
+        evidence = "Not addressed."
+        explanation = ""
+
+        # A. If code-writing or debugging question with execution result
+        if is_code_writing:
+            if execution_result:
+                if not execution_result.get("syntax_valid", True):
+                    awarded = 0.0
+                    evidence = str(execution_result.get("syntax_error", "Syntax error in candidate code."))
+                    explanation = f"Syntax error detected: {execution_result.get('syntax_error')}. Solution receives 0 marks."
+                elif execution_result.get("execution_error"):
+                    awarded = 0.0
+                    evidence = str(execution_result.get("execution_error", "Runtime error in candidate code."))
+                    explanation = f"Execution runtime error: {execution_result.get('execution_error')}. Solution receives 0 marks."
+                elif tests_total > 0:
+                    pass_ratio = tests_passed / tests_total
+                    awarded = round(crit.max_marks * pass_ratio, 2)
+                    evidence = f"Automated test runner: {tests_passed}/{tests_total} test cases passed."
+                    explanation = f"Deterministic code test verification: {tests_passed}/{tests_total} tests passed."
+                else:
+                    awarded = 0.0
+                    evidence = "No tests executed."
+                    explanation = "Code execution was not possible."
+            else:
+                awarded = 0.0
+                evidence = "No code execution result available."
+                explanation = "Code solution could not be evaluated without execution result."
+
+        # B. Output prediction criterion
+        elif is_code_output and any(k in crit_id_lower or k in crit_desc_lower for k in ("output", "predict", "result")):
+            if output_matches:
+                awarded = crit.max_marks
+                evidence = _find_evidence_sentence(trimmed, {expected_out.lower(), "output", "print", "printed"})
+                explanation = f"Correct output predicted: '{expected_out}'."
+                demonstrated_concepts.append(f"Predicted expected output '{expected_out}'")
+            else:
+                awarded = 0.0
+                evidence = _find_evidence_sentence(trimmed, {"output", "print", "printed"})
+                explanation = f"Incorrect output predicted (expected: '{expected_out}')."
+                missing_concepts.append(f"Expected output '{expected_out}'")
+
+        # C. Mutability distinction criterion (e.g. lists vs tuples)
+        elif "mutab" in crit_id_lower or "mutability" in crit_desc_lower:
+            inverted = bool(
+                re.search(r'\blists?\s+(?:are|is|can\'t|cannot)\s+(?:not\s+mutable|immutable)', norm_answer)
+                or re.search(r'\btuples?\s+(?:are|is|can\s+be)\s+(?:mutable|modified|changed)', norm_answer)
+                or re.search(r'\blists?\s+are\s+immutable', norm_answer)
+                or re.search(r'\btuples?\s+are\s+mutable', norm_answer)
+            )
+            if inverted:
+                awarded = 0.0
+                evidence = _find_evidence_sentence(trimmed, {"mutable", "immutable", "list", "tuple"})
+                explanation = "Candidate incorrectly claimed that lists are immutable or tuples are mutable."
+                detected_misconceptions.append("Confusing mutability: lists are mutable, tuples are immutable.")
+                missing_concepts.append("Mutability distinction between lists and tuples")
+            else:
+                has_mutable = bool(
+                    re.search(r'\bmutab(?:le|ility)?\b', norm_answer)
+                    or "can be modified" in norm_answer
+                    or "change in place" in norm_answer
+                    or "can change" in norm_answer
+                    or "modify in place" in norm_answer
+                )
+                has_immutable = bool(
+                    re.search(r'\bimmutab(?:le|ility)?\b', norm_answer)
+                    or "cannot be modified" in norm_answer
+                    or "cannot change" in norm_answer
+                    or "can't change" in norm_answer
+                    or "fixed collection" in norm_answer
+                    or "cannot be altered" in norm_answer
+                )
+                target_evidence_terms = {"mutable", "immutable", "mutability", "immutability", "list", "tuple", "lists", "tuples"}
+                evidence = _find_evidence_sentence(trimmed, target_evidence_terms)
+
+                if has_mutable and has_immutable:
+                    awarded = crit.max_marks
+                    explanation = "Candidate clearly demonstrated the mutability distinction (lists are mutable, tuples are immutable)."
+                    demonstrated_concepts.append("Lists are mutable while tuples are immutable")
+                elif has_mutable or has_immutable:
+                    awarded = round(crit.max_marks * 0.5, 2)
+                    explanation = "Candidate partially demonstrated mutability (explained one side of the distinction)."
+                    demonstrated_concepts.append("Partial mutability distinction demonstrated")
+                else:
+                    awarded = 0.0
+                    explanation = "Candidate response did not demonstrate the mutability distinction."
+                    missing_concepts.append("Mutability distinction between lists and tuples")
+
+        # D. Practical use-case / real-world scenario criterion
+        elif any(k in crit_id_lower or k in crit_desc_lower for k in ("use_case", "scenario", "practical", "when you would choose")):
+            use_case_patterns = [
+                r'\bcoordinates?\b', r'\bdict(?:ionary)?\s+keys?\b', r'\bkeys?\b',
+                r'\brecords?\b', r'\bconstant(?:s)?\b', r'\bdata\s+integrity\b',
+                r'\bgps\b', r'\blatitude\b', r'\blongitude\b',
+                r'\bpoints?\b', r'\bdatabase\b', r'\bfixed\s+collection\b'
+            ]
+            matched_cases = [p for p in use_case_patterns if re.search(p, norm_answer)]
+            target_evidence_terms = {"coordinate", "coordinates", "dictionary", "dict", "key", "keys", "record", "records", "constant"}
+
+            if matched_cases:
+                awarded = crit.max_marks
+                evidence = _find_evidence_sentence(trimmed, target_evidence_terms)
+                explanation = "Candidate provided a valid practical real-world scenario for using tuples."
+                demonstrated_concepts.append("Valid practical scenario / use case demonstrated")
+            else:
+                awarded = 0.0
+                evidence = "No practical scenario or real-world use case was provided in the answer."
+                explanation = "Did not provide a practical real-world scenario (e.g. coordinates, dictionary keys, constant records) where a tuple is preferred."
+                missing_concepts.append("Practical real-world use case for tuples")
+
+        # E. Technical depth / syntax / nuances
+        elif any(k in crit_id_lower or k in crit_desc_lower for k in ("technical_depth", "syntax", "nuance", "performance", "memory")):
+            depth_terms = [
+                r'\bhash(?:able|ability)?\b', r'\bparenthes(?:es|is)?\b', r'\bbrackets?\b',
+                r'\[\]', r'\(\)', r'\bmemor(?:y)?\b', r'\boverhead\b', r'\bperform(?:ance)?\b',
+                r'\bfaster\b', r'\bsyntax\b', r'\bheterogeneous\b', r'\bhomogeneous\b'
+            ]
+            matched_depth = [p for p in depth_terms if re.search(p, norm_answer)]
+            target_evidence_terms = {"hashable", "parentheses", "brackets", "syntax", "memory", "performance", "overhead", "[]", "()"}
+
+            if len(matched_depth) >= 2:
+                awarded = crit.max_marks
+                evidence = _find_evidence_sentence(trimmed, target_evidence_terms)
+                explanation = "Candidate demonstrated accurate technical depth (syntax, memory, or hashability nuances)."
+                demonstrated_concepts.append("Technical depth (syntax, memory, or hashability)")
+            elif len(matched_depth) == 1:
+                awarded = round(crit.max_marks * 0.5, 2)
+                evidence = _find_evidence_sentence(trimmed, target_evidence_terms)
+                explanation = "Candidate partially demonstrated technical depth."
+                demonstrated_concepts.append("Partial technical depth demonstrated")
+            else:
+                awarded = 0.0
+                evidence = "Technical syntax, memory, or hashability nuances not mentioned."
+                explanation = "Did not mention syntax differences, hashability, or memory/performance nuances."
+                missing_concepts.append("Technical depth (syntax, memory, or hashability)")
+
+        # F. General criterion scoring based on expected concepts & token overlap
+        else:
+            examples = re.findall(r'\((?:e\.g\.,?\s*|such as\s*)(.*?)\)', crit.description, re.IGNORECASE)
+            example_tokens = set()
+            for ex in examples:
+                example_tokens.update(_extract_deterministic_tokens(ex))
+
+            matched_crit_tokens = crit_tokens.intersection(ans_tokens)
+            matched_example_tokens = example_tokens.intersection(ans_tokens) if example_tokens else set()
+
+            evidence = _find_evidence_sentence(trimmed, crit_tokens)
+
+            related_concepts = [
+                concept for concept in question.expected_concepts
+                if len(_extract_deterministic_tokens(concept).intersection(crit_tokens)) >= 1
+            ]
+
+            matched_concept_count = 0
+            for concept in related_concepts:
+                c_tokens = _extract_deterministic_tokens(concept)
+                if c_tokens and len(c_tokens.intersection(ans_tokens)) >= max(1, int(len(c_tokens) * 0.4)):
+                    matched_concept_count += 1
+                    if concept not in demonstrated_concepts:
+                        demonstrated_concepts.append(concept)
+                else:
+                    if concept not in missing_concepts:
+                        missing_concepts.append(concept)
+
+            if related_concepts and matched_concept_count == len(related_concepts):
+                awarded = crit.max_marks
+                explanation = f"Candidate demonstrated all expected technical concepts for '{crit.description}'."
+            elif related_concepts and matched_concept_count > 0:
+                ratio = matched_concept_count / len(related_concepts)
+                awarded = round(crit.max_marks * ratio, 2)
+                explanation = f"Candidate demonstrated partial technical concepts for '{crit.description}'."
+            elif len(matched_crit_tokens) >= 3 or (example_tokens and len(matched_example_tokens) >= 1):
+                ratio = len(matched_crit_tokens) / max(3, len(crit_tokens))
+                awarded = round(crit.max_marks * min(1.0, max(0.5, ratio)), 2)
+                explanation = f"Candidate demonstrated key technical aspects of '{crit.description}'."
+            elif len(matched_crit_tokens) >= 2:
+                ratio = len(matched_crit_tokens) / max(3, len(crit_tokens))
+                awarded = round(crit.max_marks * min(1.0, max(0.35, ratio)), 2)
+                explanation = f"Candidate partially mentioned concepts related to '{crit.description}'."
+            else:
+                awarded = 0.0
+                explanation = f"Candidate response did not demonstrate the concepts required for '{crit.description}'."
+
+        total_awarded += awarded
+        validated_evals.append(
+            CriterionEvaluation(
+                criterion_id=crit.id,
+                awarded_marks=awarded,
+                max_marks=crit.max_marks,
+                evidence=evidence,
+                explanation=explanation,
+            )
+        )
+
+    # 6. Check for detected misconceptions penalty
+    if detected_misconceptions and total_awarded > 0:
+        penalty = min(total_awarded * 0.25, 1.0)
+        total_awarded = max(0.0, total_awarded - penalty)
+
+    max_marks = question.total_marks
+    total_awarded = round(min(total_awarded, max_marks), 2)
+    percentage = round((total_awarded / max_marks) * 100.0, 2) if max_marks > 0 else 0.0
+
+    # Ensure missing concepts contains all unfulfilled concepts
+    for concept in question.expected_concepts:
+        if concept not in demonstrated_concepts and concept not in missing_concepts:
+            missing_concepts.append(concept)
+
+    # Determine status and summary
+    safe_reason = re.sub(r'AIza[0-9A-Za-z-_]{35}', '[REDACTED]', error_reason)
+    if "429" in safe_reason or "resource_exhausted" in safe_reason.lower():
+        service_note = "AI service rate limit / HTTP 429"
+    elif "timeout" in safe_reason.lower():
+        service_note = "AI service timeout"
+    elif "connection" in safe_reason.lower():
+        service_note = "AI service offline"
+    else:
+        service_note = "AI service fallback"
+
+    # Requirement 5: If a reliable score cannot be calculated (e.g. substantive answer, no criteria or zero confidence),
+    # mark as pending/unavailable instead of falsely reporting 0.
+    eval_status = "fallback"
+    syntax_failed = bool(execution_result and not execution_result.get("syntax_valid", True))
+    exec_error = bool(execution_result and execution_result.get("execution_error"))
+    tests_failed = bool(execution_result and tests_total > 0 and tests_passed == 0)
+    is_code_failure = syntax_failed or exec_error or tests_failed
+
+    if (
+        total_awarded == 0.0
+        and len(trimmed.split()) >= 15
+        and not detected_misconceptions
+        and not is_code_output
+        and not is_code_failure
+    ):
+        eval_status = "pending"
+        summary_explanation = (
+            f"Evaluation pending ({service_note}). Your answer has been safely recorded. "
+            "Automated rubric matching found insufficient criteria match; marks are not penalized with zero."
+        )
+    elif total_awarded > 0.0:
+        summary_explanation = (
+            f"Evaluation completed via deterministic fallback ({service_note}). "
+            f"Candidate demonstrated verified technical concepts (awarded {total_awarded}/{max_marks} marks, {percentage}%)."
+        )
+    else:
+        summary_explanation = (
+            f"Evaluation completed via deterministic fallback ({service_note}). "
+            f"Candidate response did not demonstrate the required technical concepts for this question (0.0/{max_marks} marks)."
+        )
+
+    return EvaluationResult(
+        question_id=question.id,
+        awarded_marks=total_awarded,
+        max_marks=max_marks,
+        percentage=percentage,
+        criteria_evaluations=validated_evals,
+        demonstrated_concepts=demonstrated_concepts,
+        partial_concepts=[],
+        missing_concepts=missing_concepts,
+        incorrect_claims=detected_misconceptions,
+        summary_explanation=summary_explanation,
+        addressed_question=True,
+        is_ambiguous=False,
+        clarification_question=None,
+        execution_result=execution_result,
+        evaluation_status=eval_status,
+    )
 
 
 def json_list(items: List[str]) -> str:

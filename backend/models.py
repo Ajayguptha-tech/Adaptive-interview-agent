@@ -164,6 +164,7 @@ class EvaluationResult(BaseModel):
     is_ambiguous: bool = False
     clarification_question: Optional[str] = None
     execution_result: Optional[Dict[str, Any]] = None  # Static or isolated run results
+    evaluation_status: str = "completed"  # "completed", "fallback", "pending", "unavailable"
 
 
 class QuestionRecord(BaseModel):

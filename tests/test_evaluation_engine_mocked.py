@@ -390,12 +390,14 @@ def test_case_k_code_with_syntax_errors(palindrome_question):
 
 
 def test_case_m_malformed_model_response_fallback(list_tuple_question):
-    """Case M: Malformed model response should trigger safe deterministic fallback without crashing."""
+    """Case M: Malformed model response triggers safe deterministic fallback awarding partial credit."""
     mock_llm = MagicMock()
     mock_llm.generate_json.side_effect = ValueError("Invalid JSON from LLM")
     engine = EvaluationEngine(llm_client=mock_llm)
 
+    # Candidate explains mutability distinction but omits practical example
     result = engine.evaluate_answer(list_tuple_question, "Lists are mutable and tuples are immutable.")
     
-    assert result.awarded_marks == 0.0
+    assert result.awarded_marks == 2.5
+    assert result.percentage == 50.0
     assert "deterministic fallback" in result.summary_explanation.lower()

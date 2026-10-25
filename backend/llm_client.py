@@ -43,6 +43,44 @@ def _sanitize_error(error_msg: str, api_key: Optional[str] = None) -> str:
     return msg
 
 
+class RateLimitError(RuntimeError):
+    """Raised when an AI provider responds with a rate limit or resource exhaustion (e.g. HTTP 429)."""
+    def __init__(self, message: str, retry_after: Optional[float] = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def _is_rate_limit_error(exc: Exception) -> Tuple[bool, Optional[float]]:
+    """
+    Detects HTTP 429 / RESOURCE_EXHAUSTED from Google Gemini or Ollama.
+    Extracts recommended retry delay in seconds if present.
+    """
+    err_str = str(exc)
+    code = getattr(exc, "code", None)
+    status_code = getattr(exc, "status_code", None)
+
+    is_429 = (
+        code == 429
+        or status_code == 429
+        or "429" in err_str
+        or "resource_exhausted" in err_str.lower()
+        or "quota exceeded" in err_str.lower()
+        or "rate limit" in err_str.lower()
+    )
+    if not is_429:
+        return False, None
+
+    retry_delay = None
+    match = re.search(r'retry\s+(?:in|after)\s+([0-9.]+)\s*(?:s|sec|seconds)?', err_str, re.IGNORECASE)
+    if match:
+        try:
+            retry_delay = float(match.group(1))
+        except (ValueError, TypeError):
+            pass
+
+    return True, retry_delay
+
+
 def _extract_json_object(content: str) -> Dict[str, Any]:
     """
     Robustly parses JSON from LLM text output.
@@ -237,6 +275,9 @@ class LLMClient:
         except Exception as e:
             safe_err = _sanitize_error(str(e), self.api_key)
             logger.warning(f"Gemini health check failed: {safe_err}")
+            is_rl, _ = _is_rate_limit_error(e)
+            if is_rl:
+                safe_err = f"Gemini service rate limit reached (HTTP 429 RESOURCE_EXHAUSTED). Details: {safe_err}"
             return {
                 "available": False,
                 "has_required_model": False,
@@ -337,6 +378,13 @@ class LLMClient:
                     temperature=temperature,
                     options=options,
                 )
+            except RateLimitError as rl_err:
+                last_err = rl_err
+                if attempt < max_retries and rl_err.retry_after is not None and 0 < rl_err.retry_after <= 2.0:
+                    logger.warning(f"Transient rate limit (retry_after={rl_err.retry_after}s). Sleeping before single retry...")
+                    time.sleep(rl_err.retry_after)
+                else:
+                    raise
             except (requests.ConnectionError, ConnectionError, TimeoutError) as exc:
                 last_err = exc
                 if attempt < max_retries:
@@ -428,10 +476,15 @@ class LLMClient:
             if isinstance(exc, ValueError):
                 raise
             err_str = str(exc)
-            if "timeout" in err_str.lower() or "timed out" in err_str.lower() or isinstance(exc, TimeoutError):
-                safe_err = _sanitize_error(err_str, self.api_key)
-                raise TimeoutError(f"Gemini request timed out after {self.timeout}s: ({safe_err})")
             safe_err = _sanitize_error(err_str, self.api_key)
+            is_rl, retry_delay = _is_rate_limit_error(exc)
+            if is_rl:
+                raise RateLimitError(
+                    f"Gemini rate limit exceeded (HTTP 429 RESOURCE_EXHAUSTED): {safe_err}",
+                    retry_after=retry_delay,
+                )
+            if "timeout" in err_str.lower() or "timed out" in err_str.lower() or isinstance(exc, TimeoutError):
+                raise TimeoutError(f"Gemini request timed out after {self.timeout}s: ({safe_err})")
             raise RuntimeError(f"Gemini generation failed: {safe_err}")
 
     def _generate_ollama_json(

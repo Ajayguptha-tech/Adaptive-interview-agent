@@ -707,6 +707,7 @@ def submit_answer(
             "is_ambiguous": eval_result.is_ambiguous,
             "clarification_question": eval_result.clarification_question,
             "execution_result": eval_result.execution_result,
+            "evaluation_status": getattr(eval_result, "evaluation_status", "completed"),
         }
 
         next_q_text = ""
@@ -724,6 +725,7 @@ def submit_answer(
             "questions_remaining": result["questions_remaining"],
             "feedback_mode": result["feedback_mode"],
             "evaluation": compat_evaluation,
+            "evaluation_status": getattr(eval_result, "evaluation_status", "completed"),
             "marks_awarded": eval_result.awarded_marks,
             "max_marks": eval_result.max_marks,
             "percentage": eval_result.percentage,

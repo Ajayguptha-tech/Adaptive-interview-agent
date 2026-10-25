@@ -339,8 +339,9 @@ def test_ollama_question_generation_mocked(tmp_path):
 def test_both_providers_failing_preserves_answer_without_fabricated_score():
     """
     Verifies that when LLM service is completely unavailable, the evaluation engine
-    does NOT award a fabricated passing score. The candidate's answer is recorded,
-    marks are 0.0, and the summary clearly notes service unavailability.
+    does NOT award a fabricated passing score, nor unfairly assign 0/5 when valid
+    concepts are demonstrated. It deterministically awards earned partial marks,
+    preserves the candidate's answer, and clearly notes fallback evaluation.
     """
     mock_failing_client = MagicMock(spec=LLMClient)
     mock_failing_client.provider = "ollama"
@@ -352,14 +353,20 @@ def test_both_providers_failing_preserves_answer_without_fabricated_score():
     q = get_question_by_id("py-beg-001")
     assert q is not None
 
+    # Candidate provides partial answer: explains mutability but omits practical scenario
     candidate_text = "I believe lists can be modified but tuples cannot."
     result = engine.evaluate_answer(q, candidate_text)
 
-    # Must NOT fabricate a score
-    assert result.awarded_marks == 0.0
-    assert result.percentage == 0.0
-    assert "fallback" in result.summary_explanation.lower() or "connection" in result.summary_explanation.lower()
-    # Criteria must document fallback explanation
-    for crit in result.criteria_evaluations:
-        assert crit.awarded_marks == 0.0
-        assert "fallback" in crit.explanation.lower() or "connection" in crit.explanation.lower()
+    # Must award earned partial credit without fabricating a full score
+    assert result.awarded_marks > 0.0
+    assert result.awarded_marks < q.total_marks
+    assert "fallback" in result.summary_explanation.lower() or "offline" in result.summary_explanation.lower()
+
+    # Mutability criterion earned marks; omitted use-case criterion received 0.0
+    crit_map = {c.criterion_id: c for c in result.criteria_evaluations}
+    assert crit_map["mutability_distinction"].awarded_marks > 0.0
+    assert crit_map["practical_use_case"].awarded_marks == 0.0
+
+    # Wholly incorrect or refusal answers receive 0.0
+    refusal_result = engine.evaluate_answer(q, "I do not know")
+    assert refusal_result.awarded_marks == 0.0

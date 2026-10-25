@@ -20,6 +20,7 @@ from backend.models import (
 )
 from backend.fullstack.code_evaluator import FullStackCodeEvaluator
 from backend.llm_client import LLMClient, default_llm_client
+from backend.evaluator import evaluate_deterministically
 
 logger = logging.getLogger(__name__)
 
@@ -414,49 +415,14 @@ Respond ONLY with valid JSON matching this schema:
         error_reason: str,
         execution_result: Optional[Dict[str, Any]],
     ) -> EvaluationResult:
-        """Deterministic fallback when LLM is unavailable."""
-        tests_passed = execution_result.get("tests_passed", 0) if execution_result else 0
-        tests_total = execution_result.get("tests_total", 0) if execution_result else 0
-        syntax_valid = execution_result.get("syntax_valid", False) if execution_result else False
-
-        awarded_total = 0.0
-        validated = []
-
-        for crit in question.rubric:
-            crit_score = 0.0
-            explanation = f"Fallback evaluation: {error_reason}"
-            if execution_result and tests_total > 0 and syntax_valid:
-                pass_ratio = tests_passed / tests_total
-                crit_score = round(crit.max_marks * pass_ratio, 2)
-                explanation = f"Deterministic test verification: {tests_passed}/{tests_total} tests passed."
-
-            awarded_total += crit_score
-            validated.append(
-                CriterionEvaluation(
-                    criterion_id=crit.id,
-                    awarded_marks=crit_score,
-                    max_marks=crit.max_marks,
-                    evidence="Deterministic fallback analysis.",
-                    explanation=explanation,
-                )
-            )
-
-        max_marks = question.total_marks
-        pct = round((awarded_total / max_marks) * 100.0, 2) if max_marks > 0 else 0.0
-
-        return EvaluationResult(
-            question_id=question.id,
-            awarded_marks=round(awarded_total, 2),
-            max_marks=max_marks,
-            percentage=pct,
-            criteria_evaluations=validated,
-            demonstrated_concepts=["Syntactically valid solution"] if syntax_valid else [],
-            partial_concepts=[],
-            missing_concepts=["Complete semantic evaluation (model connection issue)"],
-            incorrect_claims=[],
-            summary_explanation=f"Evaluated via deterministic fallback. Note: {error_reason}",
-            addressed_question=bool(len(candidate_answer) > 10),
-            is_ambiguous=False,
-            clarification_question=None,
+        """
+        Deterministic fallback when LLM is unavailable.
+        Evaluates candidate response deterministically against rubrics and expected concepts.
+        Awards fair partial credit and never falsely reports 0/5 for correct concepts.
+        """
+        return evaluate_deterministically(
+            question=question,
+            candidate_answer=candidate_answer,
             execution_result=execution_result,
+            error_reason=error_reason,
         )
