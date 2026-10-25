@@ -1,6 +1,6 @@
 """
 Unified LLM Client supporting Google Gemini (cloud/hosted) and Ollama (local)
-with robust error handling, JSON parsing, timeouts, and metrics tracking.
+with robust error handling, JSON parsing, timeouts, metrics tracking, and bounded retries.
 """
 
 import json
@@ -8,23 +8,28 @@ import logging
 import os
 import re
 import time
+from pathlib import Path
 from typing import Dict, Any, Optional
 import requests
 
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    _env_file = Path(__file__).resolve().parent.parent / ".env"
+    if _env_file.exists():
+        load_dotenv(dotenv_path=_env_file)
+    else:
+        load_dotenv()
 except ImportError:
     pass
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_OLLAMA_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
-if not DEFAULT_OLLAMA_URL.endswith("/api/chat"):
-    DEFAULT_OLLAMA_URL += "/api/chat"
+DEFAULT_OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+if DEFAULT_OLLAMA_BASE_URL.endswith("/api/chat"):
+    DEFAULT_OLLAMA_BASE_URL = DEFAULT_OLLAMA_BASE_URL[:-9].rstrip("/")
 
-DEFAULT_MODEL_NAME = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b").strip() or "qwen2.5:7b"
-DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+DEFAULT_MODEL_NAME = "qwen2.5:7b"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_TIMEOUT_SECONDS = 180
 
 
@@ -36,6 +41,47 @@ def _sanitize_error(error_msg: str, api_key: Optional[str] = None) -> str:
     msg = re.sub(r'AIza[0-9A-Za-z-_]{35}', '[REDACTED]', msg)
     msg = re.sub(r'((?:key|token|api_key)=)[^&\s]+', r'\1[REDACTED]', msg, flags=re.IGNORECASE)
     return msg
+
+
+def _extract_json_object(content: str) -> Dict[str, Any]:
+    """
+    Robustly parses JSON from LLM text output.
+    Handles markdown fences (```json ... ```), raw JSON, and text before/after JSON.
+    """
+    if not content or not content.strip():
+        raise ValueError("LLM returned empty content.")
+
+    cleaned = content.strip()
+    # Strip markdown code fences
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    cleaned = cleaned.strip()
+
+    # Fast path: direct JSON parse
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback: find outer-most JSON object {...}
+    start_idx = cleaned.find("{")
+    end_idx = cleaned.rfind("}")
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        candidate = cleaned[start_idx : end_idx + 1]
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError(f"Could not parse valid JSON object from LLM output: {cleaned[:200]}")
 
 
 class LLMClient:
@@ -55,11 +101,16 @@ class LLMClient:
         # Determine API key
         self.api_key = (api_key or os.environ.get("GEMINI_API_KEY", "")).strip()
 
-        # Determine provider: explicit > LLM_PROVIDER env > GEMINI_API_KEY presence > ollama
+        # Determine provider: explicit provider > LLM_PROVIDER env > GEMINI_API_KEY presence > ollama
         env_provider = os.environ.get("LLM_PROVIDER", "").strip().lower()
         if provider:
-            self.provider = provider.lower()
+            p = provider.strip().lower()
+            if p not in ("gemini", "ollama"):
+                raise ValueError(f"Invalid provider '{provider}'. Must be 'ollama' or 'gemini'.")
+            self.provider = p
         elif env_provider:
+            if env_provider not in ("gemini", "ollama"):
+                raise ValueError(f"Invalid LLM_PROVIDER '{env_provider}'. Must be 'ollama' or 'gemini'.")
             self.provider = env_provider
         elif self.api_key:
             self.provider = "gemini"
@@ -74,11 +125,18 @@ class LLMClient:
         else:
             self.model_name = os.environ.get("OLLAMA_MODEL", DEFAULT_MODEL_NAME).strip() or DEFAULT_MODEL_NAME
 
-        # Determine endpoint URL for Ollama
+        # Determine base URL and endpoint URL for Ollama
         if endpoint_url:
-            self.endpoint_url = endpoint_url
+            raw_url = endpoint_url.rstrip("/")
+            if raw_url.endswith("/api/chat"):
+                self.base_url = raw_url[:-9].rstrip("/")
+                self.endpoint_url = raw_url
+            else:
+                self.base_url = raw_url
+                self.endpoint_url = f"{raw_url}/api/chat"
         else:
-            self.endpoint_url = DEFAULT_OLLAMA_URL
+            self.base_url = DEFAULT_OLLAMA_BASE_URL
+            self.endpoint_url = f"{DEFAULT_OLLAMA_BASE_URL}/api/chat"
 
         # Initialize Gemini client if applicable
         self._gemini_client = None
@@ -91,10 +149,44 @@ class LLMClient:
                 self._gemini_client = None
 
     def check_health(self) -> Dict[str, Any]:
-        """Checks if the configured LLM service (Gemini or Ollama) is reachable and ready."""
+        """
+        Checks active provider health, while also probing availability of alternate provider.
+        Accurately reports status for both Ollama and Gemini without misleading claims.
+        """
         if self.provider == "gemini":
-            return self._check_gemini_health()
-        return self._check_ollama_health()
+            gemini_status = self._check_gemini_health()
+            ollama_status = self._check_ollama_health()
+            ollama_connected = "connected" if (ollama_status.get("available") and ollama_status.get("has_required_model")) else "disconnected"
+            gemini_connected = "connected" if gemini_status.get("available") else "disconnected"
+            return {
+                "available": gemini_status.get("available", False),
+                "has_required_model": gemini_status.get("has_required_model", False),
+                "provider": "gemini",
+                "status": gemini_connected,
+                "gemini": gemini_connected,
+                "ollama": ollama_connected,
+                "models": gemini_status.get("models", []),
+                "installed_ollama_models": ollama_status.get("models", []),
+                **({"error": gemini_status["error"]} if "error" in gemini_status else {}),
+            }
+        else:
+            ollama_status = self._check_ollama_health()
+            ollama_connected = "connected" if (ollama_status.get("available") and ollama_status.get("has_required_model")) else "disconnected"
+            gemini_status = self._check_gemini_health() if self.api_key else {"available": False}
+            gemini_connected = "connected" if gemini_status.get("available") else ("not_configured" if not self.api_key else "disconnected")
+            res: Dict[str, Any] = {
+                "available": ollama_status.get("available", False),
+                "has_required_model": ollama_status.get("has_required_model", False),
+                "provider": "ollama",
+                "status": ollama_connected,
+                "ollama": ollama_connected,
+                "gemini": gemini_connected,
+                "models": ollama_status.get("models", []),
+                "installed_ollama_models": ollama_status.get("models", []),
+            }
+            if "error" in ollama_status:
+                res["error"] = ollama_status["error"]
+            return res
 
     def _check_gemini_health(self) -> Dict[str, Any]:
         """Performs a real reachability check against Google Gemini API."""
@@ -155,30 +247,64 @@ class LLMClient:
 
     def _check_ollama_health(self) -> Dict[str, Any]:
         """Checks if Ollama service is reachable and has the required model."""
-        base_url = self.endpoint_url.replace("/api/chat", "")
-        tags_url = f"{base_url}/api/tags"
+        tags_url = f"{self.base_url}/api/tags"
         try:
             resp = requests.get(tags_url, timeout=5)
             resp.raise_for_status()
             data = resp.json()
             models = data.get("models", [])
+            model_names = [m.get("name", "") for m in models]
+            target_prefix = self.model_name.split(":")[0]
             has_model = any(
-                m.get("name", "").startswith(self.model_name.split(":")[0])
-                for m in models
+                name == self.model_name or name.startswith(target_prefix + ":") or name == target_prefix
+                for name in model_names
             )
+            if not has_model:
+                installed_str = ", ".join(f"'{n}'" for n in model_names) if model_names else "none"
+                error_msg = (
+                    f"Configured Ollama model '{self.model_name}' is not installed. "
+                    f"Installed models: [{installed_str}]. "
+                    f"Run 'ollama pull {self.model_name}' in PowerShell/terminal, "
+                    f"or set OLLAMA_MODEL in .env to an installed model."
+                )
+                return {
+                    "available": True,
+                    "has_required_model": False,
+                    "provider": "ollama",
+                    "models": model_names,
+                    "error": error_msg,
+                }
             return {
                 "available": True,
-                "has_required_model": has_model,
+                "has_required_model": True,
                 "provider": "ollama",
-                "models": [m.get("name") for m in models],
+                "models": model_names,
             }
-        except Exception as e:
-            logger.warning(f"Ollama health check failed: {e}")
+        except requests.ConnectionError as exc:
             return {
                 "available": False,
                 "has_required_model": False,
                 "provider": "ollama",
-                "error": str(e),
+                "error": (
+                    f"Ollama connection error: Service not reachable at {self.base_url}. "
+                    "Ensure Ollama is running (`ollama serve` or open Ollama desktop app)."
+                ),
+                "models": [],
+            }
+        except requests.Timeout:
+            return {
+                "available": False,
+                "has_required_model": False,
+                "provider": "ollama",
+                "error": f"Ollama health check timed out after 5s at {tags_url}.",
+                "models": [],
+            }
+        except Exception as exc:
+            return {
+                "available": False,
+                "has_required_model": False,
+                "provider": "ollama",
+                "error": f"Ollama health check failed: {exc}",
                 "models": [],
             }
 
@@ -188,24 +314,42 @@ class LLMClient:
         system_prompt: Optional[str] = None,
         temperature: float = 0.1,
         options: Optional[Dict[str, Any]] = None,
+        max_retries: int = 1,
     ) -> Dict[str, Any]:
         """
         Sends a request expecting structured JSON.
         Validates, parses the JSON response, and records latency & token metrics.
+        Includes bounded retry for transient connection/timeout glitches.
         """
-        if self.provider == "gemini":
-            return self._generate_gemini_json(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                temperature=temperature,
-                options=options,
-            )
-        return self._generate_ollama_json(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            temperature=temperature,
-            options=options,
-        )
+        last_err = None
+        for attempt in range(max_retries + 1):
+            try:
+                if self.provider == "gemini":
+                    return self._generate_gemini_json(
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        temperature=temperature,
+                        options=options,
+                    )
+                return self._generate_ollama_json(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    temperature=temperature,
+                    options=options,
+                )
+            except (requests.ConnectionError, ConnectionError, TimeoutError) as exc:
+                last_err = exc
+                if attempt < max_retries:
+                    backoff = 1.0 * (2 ** attempt)
+                    logger.warning(f"Transient error on attempt {attempt + 1}, retrying in {backoff}s: {exc}")
+                    time.sleep(backoff)
+                else:
+                    raise
+            except Exception:
+                raise
+
+        if last_err:
+            raise last_err
 
     def _generate_gemini_json(
         self,
@@ -275,24 +419,9 @@ class LLMClient:
             }
 
             content = getattr(response, "text", "") or ""
-            if not content.strip():
-                raise ValueError("LLM returned empty content.")
+            return _extract_json_object(content)
 
-            cleaned = content.strip()
-            if cleaned.startswith("```json"):
-                cleaned = cleaned[7:]
-            elif cleaned.startswith("```"):
-                cleaned = cleaned[3:]
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
-            cleaned = cleaned.strip()
-
-            parsed = json.loads(cleaned)
-            if not isinstance(parsed, dict):
-                raise ValueError(f"Expected JSON object, got {type(parsed).__name__}")
-            return parsed
-
-        except json.JSONDecodeError as exc:
+        except ValueError as exc:
             safe_snippet = _sanitize_error(content[:200] if content else 'None', self.api_key)
             raise ValueError(f"LLM returned invalid JSON: {exc}. Content was: {safe_snippet}")
         except Exception as exc:
@@ -344,12 +473,19 @@ class LLMClient:
             "options": merged_options,
         }
 
+        t_start = time.perf_counter()
+        content = ""
         try:
             resp = requests.post(self.endpoint_url, json=payload, timeout=self.timeout)
+            if resp.status_code == 404:
+                raise RuntimeError(
+                    f"Ollama model '{self.model_name}' not found on server. "
+                    f"Run 'ollama pull {self.model_name}' to download it."
+                )
             resp.raise_for_status()
             body = resp.json()
 
-            # Instrument Ollama performance metrics
+            elapsed_ms = round((time.perf_counter() - t_start) * 1000.0, 2)
             total_ns = body.get("total_duration", 0)
             p_eval_ns = body.get("prompt_eval_duration", 0)
             eval_ns = body.get("eval_duration", 0)
@@ -359,7 +495,7 @@ class LLMClient:
             tps = (eval_count / (eval_ns / 1e9)) if eval_ns > 0 else 0.0
 
             self.last_perf_stats = {
-                "total_duration_ms": round(total_ns / 1e6, 2),
+                "total_duration_ms": round(total_ns / 1e6, 2) if total_ns else elapsed_ms,
                 "prompt_eval_duration_ms": round(p_eval_ns / 1e6, 2),
                 "eval_duration_ms": round(eval_ns / 1e6, 2),
                 "prompt_eval_count": p_eval_count,
@@ -368,24 +504,19 @@ class LLMClient:
             }
 
             content = body.get("message", {}).get("content", "")
-            if not content:
-                raise ValueError("LLM returned empty content.")
+            return _extract_json_object(content)
 
-            parsed = json.loads(content)
-            if not isinstance(parsed, dict):
-                raise ValueError(f"Expected JSON object, got {type(parsed).__name__}")
-            return parsed
-
-        except requests.ConnectionError as exc:
-            raise RuntimeError(f"Ollama connection error: Is Ollama running on {self.endpoint_url}? ({exc})")
+        except (requests.ConnectionError, ConnectionError) as exc:
+            raise ConnectionError(f"Ollama connection error: Is Ollama running on {self.base_url}? ({exc})")
         except requests.Timeout as exc:
             raise TimeoutError(f"Ollama request timed out after {self.timeout}s: ({exc})")
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"LLM returned invalid JSON: {exc}. Content was: {content[:200] if 'content' in locals() else 'None'}")
+        except ValueError as exc:
+            raise ValueError(f"LLM returned invalid JSON: {exc}. Content was: {content[:200] if content else 'None'}")
         except Exception as exc:
-            raise RuntimeError(f"LLM generation failed: {exc}")
+            if isinstance(exc, (RuntimeError, TimeoutError, ValueError)):
+                raise
+            raise RuntimeError(f"Ollama generation failed: {exc}")
 
 
 # Default global instance
 default_llm_client = LLMClient()
-

@@ -146,20 +146,24 @@ def health():
     """Health check for API and AI service."""
     ai_status = default_llm_client.check_health()
     provider = ai_status.get("provider", getattr(default_llm_client, "provider", "ollama"))
-    is_available = bool(ai_status.get("available", False))
+    is_available = bool(ai_status.get("available", False) and ai_status.get("has_required_model", False))
     connection_status = "connected" if is_available else "disconnected"
 
     response = {
         "api": "running",
         "provider": provider,
         "status": connection_status,
-        "ollama": connection_status if provider == "ollama" else "disconnected",
-        "required_model_available": ai_status.get("has_required_model", False),
+        "ollama": ai_status.get("ollama", connection_status if provider == "ollama" else "disconnected"),
+        "required_model_available": bool(ai_status.get("has_required_model", False)),
         "models": ai_status.get("models", []),
     }
-    if provider == "gemini":
+    if "gemini" in ai_status:
+        response["gemini"] = ai_status["gemini"]
+    elif provider == "gemini":
         response["gemini"] = connection_status
-    if "error" in ai_status:
+    if "installed_ollama_models" in ai_status:
+        response["installed_ollama_models"] = ai_status["installed_ollama_models"]
+    if "error" in ai_status and not is_available:
         response["error"] = ai_status["error"]
     return response
 
